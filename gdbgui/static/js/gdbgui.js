@@ -23,7 +23,16 @@
  *
  */
 
-window.State = (function ($, _, Awesomplete, Split, io, moment, debug, initial_data) {
+ /* global stator */
+ /* global Reactor */
+ /* global Awesomplete */
+ /* global Split */
+ /* global io */
+ /* global moment */
+ /* global debug */
+ /* global initial_data */
+
+window.State = (function ($, _, stator, Reactor, Awesomplete, Split, io, moment, debug, initial_data) {
 "use strict";
 
 /**
@@ -376,8 +385,8 @@ let State = {
  * Only emit, at most, every 50 milliseconds.
  */
 State.dispatch_state_change = _.debounce((key) => {
-        debug_print('dispatching event_global_state_changed')
-        window.dispatchEvent(new CustomEvent('event_global_state_changed', {'detail': {'key_changed': key}}))
+        debug_print('dispatching state_changed')
+        window.dispatchEvent(new CustomEvent('state_changed', {'detail': {'key_changed': key}}))
     }, 50)
 
 /**
@@ -848,9 +857,9 @@ GdbMiOutput.scroll_to_bottom = _.debounce(GdbMiOutput._scroll_to_bottom, 300, {l
 const Breakpoint = {
     el: $('#breakpoints'),
     init: function(){
+        new Reactor('#breakpoints', {}, Breakpoint.render)
+
         $("body").on("click", ".toggle_breakpoint_enable", Breakpoint.toggle_breakpoint_enable)
-        Breakpoint.render()
-        window.addEventListener('event_global_state_changed', Breakpoint.event_global_state_changed)
     },
     toggle_breakpoint_enable: function(e){
         if($(e.currentTarget).prop('checked')){
@@ -858,9 +867,6 @@ const Breakpoint = {
         }else{
             GdbApi.run_gdb_command([`-break-disable ${e.currentTarget.dataset.breakpoint_num}`, GdbApi.get_break_list_cmd()])
         }
-    },
-    event_global_state_changed: function(){
-        Breakpoint.render()
     },
     render: function(){
         const MAX_CHARS_TO_SHOW_FROM_SOURCE = 40
@@ -960,7 +966,7 @@ const Breakpoint = {
         if(bkpt_html === ''){
             bkpt_html = '<span class=placeholder>no breakpoints</span>'
         }
-        Breakpoint.el.html(bkpt_html)
+        return bkpt_html
     },
     remove_breakpoint_if_present: function(fullname, line){
         for (let b of State.get('breakpoints')){
@@ -985,11 +991,13 @@ const Breakpoint = {
  * The source code component
  */
 const SourceCode = {
-    el: $('#code_table'),
     el_code_container: $('#code_container'),
     el_title: $('#source_code_heading'),
     el_jump_to_line_input: $('#jump_to_line'),
     init: function(){
+
+        new Reactor('#code_table', {updated_html: SourceCode.updated_html}, SourceCode.render)
+
         $("body").on("click", ".srccode td.line_num", SourceCode.click_gutter)
         $("body").on("click", ".view_file", SourceCode.click_view_file)
         $('.fetch_assembly_cur_line').click(SourceCode.fetch_assembly_cur_line)
@@ -998,7 +1006,7 @@ const SourceCode = {
 
         window.addEventListener('event_inferior_program_exited', SourceCode.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', SourceCode.event_inferior_program_running)
-        window.addEventListener('event_global_state_changed', SourceCode.event_global_state_changed)
+        window.addEventListener('state_changed', SourceCode.state_changed)
     },
     event_inferior_program_exited: function(e){
         SourceCode.remove_line_highlights()
@@ -1007,7 +1015,7 @@ const SourceCode = {
     event_inferior_program_running: function(e){
         SourceCode.remove_line_highlights()
     },
-    event_global_state_changed: function(){
+    state_changed: function(){
         SourceCode.render()
     },
     click_gutter: function(e){
@@ -1113,19 +1121,21 @@ const SourceCode = {
             code_container.addClass(current_theme)
         }
     },
-    render: function(){
+    should_render: function(reactor){
+    },
+    render: function(reactor){
         SourceCode.set_theme_in_dom()
+
+        if(State.get('fullname_to_render') === null){
+            return ''
+        }else if(!SourceCode.is_cached(State.get('fullname_to_render'))){
+            SourceCode.fetch_file(State.get('fullname_to_render'))
+            return ''
+        }
 
         let fullname = State.get('fullname_to_render')
         , current_line_of_source_code = parseInt(State.get('current_line_of_source_code'))
         , addr = State.get('current_assembly_address')
-
-        if(State.get('fullname_to_render') === null){
-            return
-        }else if(!SourceCode.is_cached(State.get('fullname_to_render'))){
-            SourceCode.fetch_file(State.get('fullname_to_render'))
-            return
-        }
 
         let f = _.find(State.get('cached_source_files'), i => i.fullname === fullname)
         let source_code = f.source_code
@@ -1173,13 +1183,14 @@ const SourceCode = {
                 `)
             line_num++;
         }
-        SourceCode.el_title.text(fullname)
-        SourceCode.el.html(tbody.join(''))
-        SourceCode.render_breakpoints()
-        SourceCode.highlight_paused_line_and_scrollto_line()
-
 
         State.set('rendered_source_file_fullname', fullname)
+        SourceCode.el_title.text(fullname)
+        return tbody.join('')
+    },
+    updated_html: function(reactor){
+        SourceCode.render_breakpoints()
+        SourceCode.highlight_paused_line_and_scrollto_line()
         State.set('has_unrendered_assembly', false)
     },
     // re-render breakpoints on whichever file is loaded
@@ -1439,7 +1450,7 @@ const SourceCode = {
 const SourceFileAutocomplete = {
     el: $('#source_file_input'),
     init: function(){
-        window.addEventListener('event_global_state_changed', SourceFileAutocomplete.render)
+        window.addEventListener('state_changed', SourceFileAutocomplete.render)
 
         SourceFileAutocomplete.el.keyup(SourceFileAutocomplete.keyup_source_file_input)
 
@@ -1519,12 +1530,10 @@ const SourceFileAutocomplete = {
  * The Registers component
  */
 const Registers = {
-    el: $('#registers'),
     init: function(){
-        Registers.render_not_paused()
+        new Reactor('#registers', {}, Registers.render)
         window.addEventListener('event_inferior_program_exited', Registers.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', Registers.event_inferior_program_running)
-        window.addEventListener('event_global_state_changed', Registers.event_global_state_changed)
     },
     get_update_cmds: function(){
         let cmds = []
@@ -1541,9 +1550,6 @@ const Registers = {
         }
         return cmds
     },
-    render_not_paused: function(){
-        Registers.el.html('<span class=placeholder>not paused</span>')
-    },
     cache_register_names: function(names){
         // filter out non-empty names
         State.set('register_names', names.filter(name => name))
@@ -1553,14 +1559,10 @@ const Registers = {
         State.set('current_register_values', {})
     },
     event_inferior_program_exited: function(){
-        Registers.render_not_paused()
         Registers.clear_cached_values()
     },
     event_inferior_program_running: function(){
-        Registers.render_not_paused()
-    },
-    event_global_state_changed: function(){
-        Registers.render()
+        // Registers.render_not_paused()
     },
     render: function(){
         if(State.get('register_names').length === Object.keys(State.get('current_register_values')).length){
@@ -1606,8 +1608,9 @@ const Registers = {
                 register_table_data.push([name, disp_hex_val, disp_dec_val])
             }
 
-            Registers.el.html(Util.get_table(columns, register_table_data, 'font-size: 0.9em;'))
+            return Util.get_table(columns, register_table_data, 'font-size: 0.9em;')
         }
+        return'<span class=placeholder>no data to display</span>'
     }
 }
 
@@ -1618,6 +1621,8 @@ const Settings = {
     el: $('#gdbgui_settings_button'),
     pane: $('#settings_container'),
     init: function(){
+        new Reactor('#settings_body', {}, Settings.render)
+
         $('body').on('change', '#theme_selector', Settings.theme_selection_changed)
         $('body').on('change', '#syntax_highlight_selector', Settings.syntax_highlight_selector_changed)
         $('body').on('change', '#checkbox_auto_add_breakpoint_to_main', Settings.checkbox_auto_add_breakpoint_to_main_changed)
@@ -1625,7 +1630,7 @@ const Settings = {
         $('body').on('change', '#refresh_state_after_sending_console_command', Settings.update_state_from_checkbox_and_id)  // id must match existing key in state
         $('body').on('change', '#show_all_sent_commands_in_console', Settings.update_state_from_checkbox_and_id)  // id must match existing key in state
         $('body').on('click', '.toggle_settings_view', Settings.click_toggle_settings_view)
-        window.addEventListener('event_global_state_changed', Settings.render)
+
 
         // Fetch the latest version only if using in normal mode. If debugging, we tend to
         // refresh quite a bit, which might make too many requests to github and cause them
@@ -1676,8 +1681,7 @@ const Settings = {
             }
         }
 
-        $('#settings_body').html(
-            `<table class='table table-condensed'>
+        return `<table class='table table-condensed'>
             <tbody>
             <tr><td>
                 <div class=checkbox>
@@ -1736,8 +1740,6 @@ const Settings = {
             a <a href='http://grassfedcode.com'>grassfedcode</a> project | <a href=https://github.com/cs01/gdbgui>github</a> | <a href=https://pypi.python.org/pypi/gdbgui>pyPI</a>
             |  <a href='https://www.amazon.com/?&_encoding=UTF8&tag=grassfedcode04-20'>shop amazon to support gdbgui</a>
             `
-
-            )
     },
     click_toggle_settings_view: function(e){
         if(e.target.classList.contains('toggle_settings_view')){  // need this check in case background div has this class
@@ -1940,18 +1942,18 @@ const Memory = {
     MAX_ADDRESS_DELTA_BYTES: 1000,
     DEFAULT_ADDRESS_DELTA_BYTES: 31,
     init: function(){
+        new Reactor('#memory', {}, Memory.render)
+
         $("body").on("click", ".memory_address", Memory.click_memory_address)
         $("body").on("click", "#read_preceding_memory", Memory.click_read_preceding_memory)
         $("body").on("click", "#read_more_memory", Memory.click_read_more_memory)
         Memory.el_start.keydown(Memory.keydown_in_memory_inputs)
         Memory.el_end.keydown(Memory.keydown_in_memory_inputs)
         Memory.el_bytes_per_line.keydown(Memory.keydown_in_memory_inputs)
-        Memory.render()
 
         window.addEventListener('event_inferior_program_exited', Memory.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', Memory.event_inferior_program_running)
         window.addEventListener('event_inferior_program_paused', Memory.event_inferior_program_paused)
-        window.addEventListener('event_global_state_changed', Memory.event_global_state_changed)
     },
     keydown_in_memory_inputs: function(e){
         if (e.keyCode === ENTER_BUTTON_NUM){
@@ -2028,10 +2030,9 @@ const Memory = {
      * Internal render function. Not called directly to avoid wasting DOM cycles
      * when memory is being received from gdb at a high rate.
      */
-    _render: function(){
+    render: function(){
         if(_.keys(State.get('memory_cache')).length === 0){
-            Memory.el.html('<span class=placeholder>no memory requested</span>')
-            return
+            return '<span class=placeholder>no memory to display</span>'
         }
 
         let data = []
@@ -2094,10 +2095,7 @@ const Memory = {
         }
 
         let table = Util.get_table(['address', 'hex' , 'char'], data)
-        Memory.el.html(table)
-    },
-    render_not_paused: function(){
-        Memory.el.html('<span class=placeholder>not paused</span>')
+        return table
     },
     _make_addr_into_link: function(addr, name=addr){
         let _addr = addr
@@ -2125,23 +2123,17 @@ const Memory = {
     },
     event_inferior_program_exited: function(){
         Memory.clear_cache()
-        Memory.render_not_paused()
     },
     event_inferior_program_running: function(){
         Memory.clear_cache()
     },
     event_inferior_program_paused: function(){
-        Memory.render()
+        // Memory.render()
     },
-    event_global_state_changed: function(){
-        Memory.render()
+    state_changed: function(){
+        // Memory.render()
     }
 }
-/**
- * Memory data comes in fast byte by byte, so prevent rendering while more
- * memory is still being received
- */
-Memory.render = _.debounce(Memory._render)
 
 /**
  * The Expressions component allows the user to inspect expressions
@@ -2158,14 +2150,12 @@ const Expressions = {
         // create new var when enter is pressed
         Expressions.el_input.keydown(Expressions.keydown_on_input)
 
-        window.addEventListener('event_global_state_changed', Expressions.render)
+        new Reactor('#expressions', {updated_html: Expressions.updated_html}, Expressions.render)
 
         // remove var when icon is clicked
         $("body").on("click", ".delete_gdb_variable", Expressions.click_delete_gdb_variable)
         $("body").on("click", ".toggle_children_visibility", Expressions.click_toggle_children_visibility)
         $("body").on("click", ".toggle_plot", Expressions.click_toggle_plot)
-
-        Expressions.render()
     },
     /**
      * Locally save the variable to our cached variables
@@ -2387,7 +2377,7 @@ const Expressions = {
             }
         }
     },
-    _render: function(){
+    render: function(reactor){
         let html = ''
         const is_root = true
 
@@ -2410,9 +2400,13 @@ const Expressions = {
             html = '<span class=placeholder>no expressions in this context</span>'
         }
         html += '<div id=tooltip style="display: hidden"/>'
-        Expressions.el.html(html)
 
-        for(let obj of objs_to_render){
+        reactor.objs_to_render = objs_to_render
+        reactor.force_update = true
+        return html
+    },
+    updated_html: function(reactor){
+        for(let obj of reactor.objs_to_render){
             Expressions.plot_var_and_children(obj)
         }
     },
@@ -2665,26 +2659,22 @@ const Expressions = {
         State.set('expressions', expressions)
     },
 }
-Expressions.render = _.debounce(Expressions._render, 50, {leading: true})
-
 
 const Locals = {
-    el: $('#locals'),
     init: function(){
+        new Reactor('#locals', {}, Locals.render)
+
         window.addEventListener('event_inferior_program_exited', Locals.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', Locals.event_inferior_program_running)
-        window.addEventListener('event_inferior_program_paused', Locals.event_inferior_program_paused)
-        window.addEventListener('event_global_state_changed', Locals.event_global_state_changed)
+
         $('body').on('click', '.locals_autocreate_new_expr', Locals.click_locals_autocreate_new_expr)
-        Locals.clear()
     },
-    event_global_state_changed: function(){
+    state_changed: function(){
         Locals.render()
     },
     render: function(){
         if(State.get('locals').length === 0){
-            Locals.el.html('<span class=placeholder>no variables in this frame</span>')
-            return
+            return '<span class=placeholder>no variables to display</span>'
         }
         let sorted_local_objs = _.sortBy(State.get('locals'), unsorted_obj => unsorted_obj.name)
         let html = sorted_local_objs.map(local => {
@@ -2732,7 +2722,7 @@ const Locals = {
             }
 
         })
-        Locals.el.html(html.join(''))
+        return html.join('')
     },
     click_locals_autocreate_new_expr: function(e){
         let expr = e.currentTarget.dataset.expression
@@ -2754,7 +2744,6 @@ const Locals = {
     },
     clear: function(){
         Locals.clear_autocreated_exprs()
-        Locals.el.html('<span class=placeholder>not paused</span>')
     },
     event_inferior_program_exited: function(){
         Locals.clear()
@@ -2762,24 +2751,17 @@ const Locals = {
     event_inferior_program_running: function(){
         Locals.clear()
     },
-    event_inferior_program_paused: function(){
-    },
 }
 
 /**
  * The Threads component
  */
 const Threads = {
-    el: $('#threads'),
     init: function(){
+        new Reactor('#threads', {}, Threads.render)
+
         $("body").on("click", ".select_thread_id", Threads.click_select_thread_id)
         $("body").on("click", ".select_frame", Threads.click_select_frame)
-        Threads.render()
-
-        window.addEventListener('event_global_state_changed', Threads.event_global_state_changed)
-    },
-    event_global_state_changed: function(){
-        Threads.render()
     },
     click_select_thread_id: function(e){
         GdbApi.run_gdb_command(`-thread-select ${e.currentTarget.dataset.thread_id}`)
@@ -2838,9 +2820,9 @@ const Threads = {
                 }
             }
 
-            Threads.el.html(body.join(''))
+            return body.join('')
         }else{
-            Threads.el.html('<span class=placeholder>not paused</span>')
+            return '<span class=placeholder>not paused</span>'
         }
     },
     get_stack_table: function(stack, cur_addr, is_current_thread_being_rendered, thread_id){
@@ -3217,4 +3199,4 @@ if(_.isString(initial_data.initial_binary_and_args) && _.trim(initial_data.initi
 }
 
 return State
-})(jQuery, _, Awesomplete, Split, io, moment, debug, initial_data)
+})(jQuery, _, stator, Reactor, Awesomplete, Split, io, moment, debug, initial_data)

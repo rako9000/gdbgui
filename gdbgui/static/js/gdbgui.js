@@ -998,7 +998,7 @@ const SourceCode = {
     el_jump_to_line_input: $('#jump_to_line'),
     init: function(){
 
-        new Reactor('#code_table', {updated_html: SourceCode.updated_html}, SourceCode.render)
+        new Reactor('#code_table', {after_render: SourceCode.after_render}, SourceCode.render)
 
         $("body").on("click", ".srccode td.line_num", SourceCode.click_gutter)
         $("body").on("click", ".view_file", SourceCode.click_view_file)
@@ -1008,17 +1008,12 @@ const SourceCode = {
 
         window.addEventListener('event_inferior_program_exited', SourceCode.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', SourceCode.event_inferior_program_running)
-        window.addEventListener('state_changed', SourceCode.state_changed)
     },
     event_inferior_program_exited: function(e){
         SourceCode.remove_line_highlights()
-        SourceCode.clear_cached_source_files()
     },
     event_inferior_program_running: function(e){
         SourceCode.remove_line_highlights()
-    },
-    state_changed: function(){
-        SourceCode.render()
     },
     click_gutter: function(e){
         let line = e.currentTarget.dataset.line
@@ -1125,15 +1120,27 @@ const SourceCode = {
         }
     },
     should_render: function(reactor){
+        let fullname = State.get('fullname_to_render')
+        // don't re-render all the lines if they are already rendered.
+        // just update breakpoints and line highlighting
+        if(fullname === State.get('rendered_source_file_fullname') && !State.get('has_unrendered_assembly')) {
+            // we already rendered this file, and the assembly, so don't re-render it
+            SourceCode.highlight_paused_line_and_scrollto_line(fullname, State.get('current_line_of_source_code'), addr)
+            SourceCode.render_breakpoints()
+            SourceCode.make_current_line_visible()
+            return false
+        }
+        return true
     },
     render: function(reactor){
         SourceCode.set_theme_in_dom()
 
         if(State.get('fullname_to_render') === null){
+            State.set('rendered_source_file_fullname', null)
             return ''
         }else if(!SourceCode.is_cached(State.get('fullname_to_render'))){
-            SourceCode.el.html('')
             SourceCode.fetch_file(State.get('fullname_to_render'))
+            State.set('rendered_source_file_fullname', null)
             return ''
         }
 
@@ -1154,16 +1161,6 @@ const SourceCode = {
         }
 
         SourceCode.show_modal_if_file_modified_after_binary(fullname)
-
-        // don't re-render all the lines if they are already rendered.
-        // just update breakpoints and line highlighting
-        if(fullname === State.get('rendered_source_file_fullname') && !State.get('has_unrendered_assembly')) {
-            // we already rendered this file, and the assembly, so don't re-render it
-            SourceCode.highlight_paused_line_and_scrollto_line(fullname, State.get('current_line_of_source_code'), addr)
-            SourceCode.render_breakpoints()
-            SourceCode.make_current_line_visible()
-            return
-        }
 
         let assembly = SourceCode.get_cached_assembly_for_file(fullname)
             , line_num = 1
@@ -1192,7 +1189,7 @@ const SourceCode = {
         SourceCode.el_title.text(fullname)
         return tbody.join('')
     },
-    updated_html: function(reactor){
+    after_render: function(reactor){
         SourceCode.render_breakpoints()
         SourceCode.highlight_paused_line_and_scrollto_line()
         State.set('has_unrendered_assembly', false)
@@ -1454,7 +1451,7 @@ const SourceCode = {
 const SourceFileAutocomplete = {
     el: $('#source_file_input'),
     init: function(){
-        window.addEventListener('state_changed', SourceFileAutocomplete.render)
+        stator.add_listener(SourceFileAutocomplete.render)
 
         SourceFileAutocomplete.el.keyup(SourceFileAutocomplete.keyup_source_file_input)
 
@@ -2134,9 +2131,6 @@ const Memory = {
     event_inferior_program_paused: function(){
         // Memory.render()
     },
-    state_changed: function(){
-        // Memory.render()
-    }
 }
 
 /**
@@ -2154,7 +2148,7 @@ const Expressions = {
         // create new var when enter is pressed
         Expressions.el_input.keydown(Expressions.keydown_on_input)
 
-        new Reactor('#expressions', {updated_html: Expressions.updated_html}, Expressions.render)
+        new Reactor('#expressions', {after_render: Expressions.after_render}, Expressions.render)
 
         // remove var when icon is clicked
         $("body").on("click", ".delete_gdb_variable", Expressions.click_delete_gdb_variable)
@@ -2409,7 +2403,7 @@ const Expressions = {
         reactor.force_update = true
         return html
     },
-    updated_html: function(reactor){
+    after_render: function(reactor){
         for(let obj of reactor.objs_to_render){
             Expressions.plot_var_and_children(obj)
         }
@@ -2672,9 +2666,6 @@ const Locals = {
         window.addEventListener('event_inferior_program_running', Locals.event_inferior_program_running)
 
         $('body').on('click', '.locals_autocreate_new_expr', Locals.click_locals_autocreate_new_expr)
-    },
-    state_changed: function(){
-        Locals.render()
     },
     render: function(){
         if(State.get('locals').length === 0){

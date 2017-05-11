@@ -246,44 +246,6 @@ let State = {
         expr_autocreated_for_locals: null,  // true when an expression is being autocreated for a local, false otherwise
         expressions: [],  // array of dicts. Key is expression, value has various keys. See Expressions component.
     },
-    clear_program_state: function(){
-        State.set('current_line_of_source_code', undefined)
-        State.set('paused_on_frame', undefined)
-        State.set('selected_frame_num', 0)
-        State.set('current_thread_id', undefined)
-        State.set('stack', [])
-        State.set('locals', [])
-    },
-    event_inferior_program_exited: function(){
-        State.set('inferior_program', 'exited')
-        State.clear_program_state()
-    },
-    event_inferior_program_running: function(){
-        State.set('inferior_program', 'running')
-        State.clear_program_state()
-    },
-    event_inferior_program_paused: function(e){
-        let frame = e.detail || {}
-        State.set('inferior_program', 'paused')
-        State.set('paused_on_frame', frame)
-        State.set('fullname_to_render', frame.fullname)
-
-        State.set('current_line_of_source_code', frame.line)
-        State.set('current_assembly_address', frame.addr)
-    },
-    event_select_frame: function(e){
-        let selected_frame_num = e.detail || 0
-        State.set('selected_frame_num', selected_frame_num)
-    },
-    update_stack: function(stack){
-        State.set('stack', stack)
-        State.set('paused_on_frame', stack[State.get('selected_frame_num') || 0])
-
-        State.set('fullname_to_render', State.get('paused_on_frame').fullname)
-
-        State.set('current_line_of_source_code', State.get('paused_on_frame').line)
-        State.set('current_assembly_address', State.get('paused_on_frame').addr)
-    },
     /**
      * Set value of one of the keys in the current state.
      * Raise error if key does not exist.
@@ -340,47 +302,6 @@ let State = {
         cached_source_files.push(obj)
         State.set('cached_source_files', cached_source_files)
     },
-    save_breakpoints: function(payload){
-        State.set('breakpoints', [])
-        if(payload && payload.BreakpointTable && payload.BreakpointTable.body){
-            for (let breakpoint of payload.BreakpointTable.body){
-                State.save_breakpoint(breakpoint)
-            }
-        }
-    },
-    save_breakpoint: function(breakpoint){
-        let bkpt = $.extend(true, {}, breakpoint)
-
-        bkpt.is_parent_breakpoint = bkpt.addr === '<MULTIPLE>'
-        // parent breakpoints have numbers like "5.6", whereas normal breakpoints and parent breakpoints have numbers like "5"
-        bkpt.is_child_breakpoint = (parseInt(bkpt.number) !== parseFloat(bkpt.number))
-        bkpt.is_normal_breakpoint = (!bkpt.is_parent_breakpoint && !bkpt.is_child_breakpoint)
-
-        if(bkpt.is_child_breakpoint){
-            bkpt.parent_breakpoint_number = parseInt(bkpt.number)
-        }
-
-        if ('fullname' in breakpoint && breakpoint.fullname){
-            // this is a normal/child breakpoint; gdb gives it the fullname
-            bkpt.fullname_to_display = breakpoint.fullname
-        }else if ('original-location' in breakpoint && breakpoint['original-location']){
-            // this breakpoint is the parent breakpoint of multiple other breakpoints. gdb does not give it
-            // the fullname field, but rather the "original-location" field.
-            // example breakpoint['original-location']: /home/file.h:19
-            // so we need to parse out the line number, and store it
-            [bkpt.fullname_to_display, bkpt.line] = Util.parse_fullname_and_line(breakpoint['original-location'])
-        }else{
-            bkpt.fullname_to_display = null
-        }
-
-        // add the breakpoint if it's not stored already
-        let bkpts = State.get('breakpoints')
-        if(bkpts.indexOf(bkpt) === -1){
-            bkpts.push(bkpt)
-            State.set('breakpoints', bkpts)
-        }
-        return bkpt
-    },
 }
 /**
  * Debounce the event emission for more efficient/smoother rendering.
@@ -390,6 +311,38 @@ State.dispatch_state_change = _.debounce((key) => {
         debug_print('dispatching state_changed')
         window.dispatchEvent(new CustomEvent('state_changed', {'detail': {'key_changed': key}}))
     }, 50)
+
+const Events = {
+    clear_program_state: function(){
+        State.set('current_line_of_source_code', undefined)
+        State.set('paused_on_frame', undefined)
+        State.set('selected_frame_num', 0)
+        State.set('current_thread_id', undefined)
+        State.set('stack', [])
+        State.set('locals', [])
+    },
+    event_inferior_program_exited: function(){
+        State.set('inferior_program', 'exited')
+        State.clear_program_state()
+    },
+    event_inferior_program_running: function(){
+        State.set('inferior_program', 'running')
+        State.clear_program_state()
+    },
+    event_inferior_program_paused: function(e){
+        let frame = e.detail || {}
+        State.set('inferior_program', 'paused')
+        State.set('paused_on_frame', frame)
+        State.set('fullname_to_render', frame.fullname)
+
+        State.set('current_line_of_source_code', frame.line)
+        State.set('current_assembly_address', frame.addr)
+    },
+    event_select_frame: function(e){
+        let selected_frame_num = e.detail || 0
+        State.set('selected_frame_num', selected_frame_num)
+    },
+}
 
 /**
  * Modal component that is hidden by default, but shown
@@ -986,6 +939,47 @@ const Breakpoint = {
     },
     get_disabled_breakpoint_lines_for_file: function(fullname){
         return State.get('breakpoints').filter(b => (b.fullname_to_display === fullname) && b.enabled !== 'y').map(b => parseInt(b.line))
+    },
+    save_breakpoints: function(payload){
+        State.set('breakpoints', [])
+        if(payload && payload.BreakpointTable && payload.BreakpointTable.body){
+            for (let breakpoint of payload.BreakpointTable.body){
+                Breakpoint.save_breakpoint(breakpoint)
+            }
+        }
+    },
+    save_breakpoint: function(breakpoint){
+        let bkpt = $.extend(true, {}, breakpoint)
+
+        bkpt.is_parent_breakpoint = bkpt.addr === '<MULTIPLE>'
+        // parent breakpoints have numbers like "5.6", whereas normal breakpoints and parent breakpoints have numbers like "5"
+        bkpt.is_child_breakpoint = (parseInt(bkpt.number) !== parseFloat(bkpt.number))
+        bkpt.is_normal_breakpoint = (!bkpt.is_parent_breakpoint && !bkpt.is_child_breakpoint)
+
+        if(bkpt.is_child_breakpoint){
+            bkpt.parent_breakpoint_number = parseInt(bkpt.number)
+        }
+
+        if ('fullname' in breakpoint && breakpoint.fullname){
+            // this is a normal/child breakpoint; gdb gives it the fullname
+            bkpt.fullname_to_display = breakpoint.fullname
+        }else if ('original-location' in breakpoint && breakpoint['original-location']){
+            // this breakpoint is the parent breakpoint of multiple other breakpoints. gdb does not give it
+            // the fullname field, but rather the "original-location" field.
+            // example breakpoint['original-location']: /home/file.h:19
+            // so we need to parse out the line number, and store it
+            [bkpt.fullname_to_display, bkpt.line] = Util.parse_fullname_and_line(breakpoint['original-location'])
+        }else{
+            bkpt.fullname_to_display = null
+        }
+
+        // add the breakpoint if it's not stored already
+        let bkpts = State.get('breakpoints')
+        if(bkpts.indexOf(bkpt) === -1){
+            bkpts.push(bkpt)
+            State.set('breakpoints', bkpts)
+        }
+        return bkpt
     },
 }
 
@@ -2845,6 +2839,15 @@ const Threads = {
         }
         return Util.get_table([], table_data, 'font-size: 0.9em;')
     },
+    update_stack: function(stack){
+        State.set('stack', stack)
+        State.set('paused_on_frame', stack[State.get('selected_frame_num') || 0])
+
+        State.set('fullname_to_render', State.get('paused_on_frame').fullname)
+
+        State.set('current_line_of_source_code', State.get('paused_on_frame').line)
+        State.set('current_assembly_address', State.get('paused_on_frame').addr)
+    },
     set_threads: function(threads){
         State.Set('threads', $.extend(true, [], threads))
         Threads.render()
@@ -2948,7 +2951,7 @@ const process_gdb_response = function(response_array){
                 GdbApi.run_gdb_command(cmds)
 
                 // save this breakpoint
-                let bkpt = State.save_breakpoint(r.payload.bkpt)
+                let bkpt = Breakpoint.save_breakpoint(r.payload.bkpt)
 
                 // if executable does not have debug symbols (i.e. not compiled with -g flag)
                 // gdb will not return a path, but rather the function name. The function name is
@@ -2964,10 +2967,10 @@ const process_gdb_response = function(response_array){
                 GdbApi.refresh_breakpoints()
             }
             if ('BreakpointTable' in r.payload){
-                State.save_breakpoints(r.payload)
+                Breakpoint.save_breakpoints(r.payload)
             }
             if ('stack' in r.payload) {
-                State.update_stack(r.payload.stack)
+                Threads.update_stack(r.payload.stack)
             }
             if('threads' in r.payload){
                 State.set('threads', r.payload.threads)

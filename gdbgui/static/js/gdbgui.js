@@ -153,22 +153,6 @@ const Util = {
  * Global state
  */
 let State = {
-    init: function(){
-        window.addEventListener('event_inferior_program_exited', State.event_inferior_program_exited)
-        window.addEventListener('event_inferior_program_running', State.event_inferior_program_running)
-        window.addEventListener('event_inferior_program_paused', State.event_inferior_program_paused)
-        window.addEventListener('event_select_frame', State.event_select_frame)
-
-        // make sure saved preferences are set/valid
-        if(localStorage.getItem('highlight_source_code') === null){
-            localStorage.setItem('highlight_source_code', JSON.stringify(true))
-            State.set('highlight_source_code', true)
-        }
-        if(localStorage.getItem('auto_add_breakpoint_to_main') === null){
-            localStorage.setItem('auto_add_breakpoint_to_main', JSON.stringify(true))
-            State.set('auto_add_breakpoint_to_main', true)
-        }
-    },
     /**
      * Internal state. This is set upon initialization directly, then
      * updated with State.set(), and accessed with State.get().
@@ -297,11 +281,6 @@ let State = {
             return val
         }
     },
-    add_source_file_to_cache: function(obj){
-        let cached_source_files = State.get('cached_source_files')
-        cached_source_files.push(obj)
-        State.set('cached_source_files', cached_source_files)
-    },
 }
 /**
  * Debounce the event emission for more efficient/smoother rendering.
@@ -312,7 +291,24 @@ State.dispatch_state_change = _.debounce((key) => {
         window.dispatchEvent(new CustomEvent('state_changed', {'detail': {'key_changed': key}}))
     }, 50)
 
-const Events = {
+// specify how the application's state changes due to an event
+const Reducers = {
+    init: function(){
+        window.addEventListener('event_inferior_program_exited', Reducers.event_inferior_program_exited)
+        window.addEventListener('event_inferior_program_running', Reducers.event_inferior_program_running)
+        window.addEventListener('event_inferior_program_paused', Reducers.event_inferior_program_paused)
+        window.addEventListener('event_select_frame', Reducers.event_select_frame)
+
+        // make sure saved preferences are set/valid
+        if(localStorage.getItem('highlight_source_code') === null){
+            localStorage.setItem('highlight_source_code', JSON.stringify(true))
+            State.set('highlight_source_code', true)
+        }
+        if(localStorage.getItem('auto_add_breakpoint_to_main') === null){
+            localStorage.setItem('auto_add_breakpoint_to_main', JSON.stringify(true))
+            State.set('auto_add_breakpoint_to_main', true)
+        }
+    },
     clear_program_state: function(){
         State.set('current_line_of_source_code', undefined)
         State.set('paused_on_frame', undefined)
@@ -323,11 +319,11 @@ const Events = {
     },
     event_inferior_program_exited: function(){
         State.set('inferior_program', 'exited')
-        State.clear_program_state()
+        Reducers.clear_program_state()
     },
     event_inferior_program_running: function(){
         State.set('inferior_program', 'running')
-        State.clear_program_state()
+        Reducers.clear_program_state()
     },
     event_inferior_program_paused: function(e){
         let frame = e.detail || {}
@@ -812,7 +808,7 @@ GdbMiOutput.scroll_to_bottom = _.debounce(GdbMiOutput._scroll_to_bottom, 300, {l
 const Breakpoint = {
     el: $('#breakpoints'),
     init: function(){
-        new Reactor('#breakpoints', {}, Breakpoint.render)
+        new Reactor('#breakpoints', Breakpoint.render)
 
         $("body").on("click", ".toggle_breakpoint_enable", Breakpoint.toggle_breakpoint_enable)
     },
@@ -992,7 +988,7 @@ const SourceCode = {
     el_jump_to_line_input: $('#jump_to_line'),
     init: function(){
 
-        new Reactor('#code_table', {after_render: SourceCode.after_render}, SourceCode.render)
+        new Reactor('#code_table', SourceCode.render, {after_render: SourceCode.after_render})
 
         $("body").on("click", ".srccode td.line_num", SourceCode.click_gutter)
         $("body").on("click", ".view_file", SourceCode.click_view_file)
@@ -1304,7 +1300,6 @@ const SourceCode = {
             return
         }
 
-        debug_print('fetching '+ fullname)
         $.ajax({
             url: "/read_file",
             cache: false,
@@ -1325,8 +1320,13 @@ const SourceCode = {
         })
     },
     add_source_file_to_cache: function(fullname, source_code, assembly, last_modified_unix_sec){
-        State.add_source_file_to_cache({'fullname': fullname, 'source_code': source_code, 'assembly': assembly,
-            'last_modified_unix_sec': last_modified_unix_sec})
+        let new_source_file = {'fullname': fullname,
+                                'source_code': source_code,
+                                'assembly': assembly,
+                                'last_modified_unix_sec': last_modified_unix_sec}
+        , cached_source_files = State.get('cached_source_files')
+        cached_source_files.push(new_source_file)
+        State.set('cached_source_files', cached_source_files)
     },
     get_source_file_obj_from_cache(fullname){
         for(let sf of State.get('cached_source_files')){
@@ -1346,9 +1346,9 @@ const SourceCode = {
         if(gdb_version_array.length === 0){
             // assuming new version, but we shouldn't ever not know the version...
             return 4
-        } else if (gdb_version_array[0] < 7 || (gdb_version_array[0] == 7 && gdb_version_array[1] <= 7)){
+
+        } else if (gdb_version_array[0] < 7 || (parseInt(gdb_version_array[0]) === 7 && gdb_version_array[1] <= 7)){
             // this option has been deprecated in newer versions, but is required in older ones
-            //
             return 3
         }else{
             return 4
@@ -1526,7 +1526,7 @@ const SourceFileAutocomplete = {
  */
 const Registers = {
     init: function(){
-        new Reactor('#registers', {}, Registers.render)
+        new Reactor('#registers', Registers.render)
         window.addEventListener('event_inferior_program_exited', Registers.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', Registers.event_inferior_program_running)
     },
@@ -1616,7 +1616,7 @@ const Settings = {
     el: $('#gdbgui_settings_button'),
     pane: $('#settings_container'),
     init: function(){
-        new Reactor('#settings_body', {}, Settings.render)
+        new Reactor('#settings_body', Settings.render)
 
         $('body').on('change', '#theme_selector', Settings.theme_selection_changed)
         $('body').on('change', '#syntax_highlight_selector', Settings.syntax_highlight_selector_changed)
@@ -1937,7 +1937,7 @@ const Memory = {
     MAX_ADDRESS_DELTA_BYTES: 1000,
     DEFAULT_ADDRESS_DELTA_BYTES: 31,
     init: function(){
-        new Reactor('#memory', {}, Memory.render)
+        new Reactor('#memory', Memory.render)
 
         $("body").on("click", ".memory_address", Memory.click_memory_address)
         $("body").on("click", "#read_preceding_memory", Memory.click_read_preceding_memory)
@@ -2142,7 +2142,7 @@ const Expressions = {
         // create new var when enter is pressed
         Expressions.el_input.keydown(Expressions.keydown_on_input)
 
-        new Reactor('#expressions', {after_render: Expressions.after_render}, Expressions.render)
+        new Reactor('#expressions', Expressions.render, {after_render: Expressions.after_render})
 
         // remove var when icon is clicked
         $("body").on("click", ".delete_gdb_variable", Expressions.click_delete_gdb_variable)
@@ -2654,7 +2654,7 @@ const Expressions = {
 
 const Locals = {
     init: function(){
-        new Reactor('#locals', {}, Locals.render)
+        new Reactor('#locals', Locals.render)
 
         window.addEventListener('event_inferior_program_exited', Locals.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', Locals.event_inferior_program_running)
@@ -2747,7 +2747,7 @@ const Locals = {
  */
 const Threads = {
     init: function(){
-        new Reactor('#threads', {}, Threads.render)
+        new Reactor('#threads', Threads.render)
 
         $("body").on("click", ".select_thread_id", Threads.click_select_thread_id)
         $("body").on("click", ".select_frame", Threads.click_select_frame)
@@ -3166,7 +3166,7 @@ Split(['#middle', '#bottom'], {
 })
 
 // initialize components
-State.init()
+Reducers.init()
 GdbApi.init()
 GdbCommandInput.init()
 Modal.init()

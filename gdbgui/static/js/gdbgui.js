@@ -9,16 +9,16 @@
  * changes, an event is emitted, which Components listen for. Each Component then re-renders itself
  * as necessary.
  *
- * The state can be changed via State.set() and retrieved via State.get(). State._state should not
- * be accessed directly. State.get() does not return references to objects, it returns new objects.
+ * The state can be changed via State.set() and retrieved via state[).]State._state should not
+ * be accessed directly. state[) ]oes not return references to objects, it returns new objects.
  * When used this way, State._state is only mutable with calls to State.set().
  *
  * This pattern is written in plain javascript, yet provides for a reactive environment. It was inspired
  * by ReactJS but does not require a build system or JSX.
  *
- * For example, calling State.set('current_line_of_source_code', 100)
+ * For example, calling state['current_line_of_source_code'] = 100
  * will change the highlighted line and automatically scroll to that line in the UI. Or calling
- * State.set('highlight_source_code', true) will "magically" make the source code be highlighted.
+ * state['highlight_source_code'] = true) will "magically" make the source code be highlighted
  * Debounce functions are used to mitigate inefficiencies of rapid state changes (see _.debounce()).
  *
  */
@@ -125,7 +125,7 @@ const Util = {
         if(user_input_array.length === 2){
             line = user_input_array[1]
         }
-        return [fullname, line]
+        return [fullname, parseInt(line)]
     },
     /**
      * @param mi_obj: gdb mi obj from pygdbmi
@@ -149,200 +149,82 @@ const Util = {
     }
 }
 
-/**
- * Global state
- */
-let State = {
-    init: function(){
-        window.addEventListener('event_inferior_program_exited', State.event_inferior_program_exited)
-        window.addEventListener('event_inferior_program_running', State.event_inferior_program_running)
-        window.addEventListener('event_inferior_program_paused', State.event_inferior_program_paused)
-        window.addEventListener('event_select_frame', State.event_select_frame)
+const initial_state = {
+    // environment
+    debug: debug,  // if gdbgui is run in debug mode
+    interpreter: initial_data.interpreter,  // either 'gdb' or 'llvm'
+    gdbgui_version: initial_data.gdbgui_version,
+    latest_gdbgui_version: '(not fetched)',
+    show_gdbgui_upgrades: initial_data.show_gdbgui_upgrades,
+    gdb_version: undefined,  // this is parsed from gdb's output
+    gdb_version_array: [],  // this is parsed from gdb's output
+    gdb_pid: undefined,
+    can_fetch_register_values: true,  // set to false if using Rust and gdb v7.12.x (see https://github.com/cs01/gdbgui/issues/64)
 
-        // make sure saved preferences are set/valid
-        if(localStorage.getItem('highlight_source_code') === null){
-            localStorage.setItem('highlight_source_code', JSON.stringify(true))
-            State.set('highlight_source_code', true)
-        }
-        if(localStorage.getItem('auto_add_breakpoint_to_main') === null){
-            localStorage.setItem('auto_add_breakpoint_to_main', JSON.stringify(true))
-            State.set('auto_add_breakpoint_to_main', true)
-        }
-    },
-    /**
-     * Internal state. This is set upon initialization directly, then
-     * updated with State.set(), and accessed with State.get().
-     * New keys cannot be added, they must be statically defined below.
-     */
-    _state: {
-        // environment
-        debug: debug,  // if gdbgui is run in debug mode
-        interpreter: initial_data.interpreter,  // either 'gdb' or 'llvm'
-        gdbgui_version: initial_data.gdbgui_version,
-        latest_gdbgui_version: '(not fetched)',
-        show_gdbgui_upgrades: initial_data.show_gdbgui_upgrades,
-        gdb_version: undefined,  // this is parsed from gdb's output
-        gdb_version_array: [],  // this is parsed from gdb's output
-        gdb_pid: undefined,
-        can_fetch_register_values: true,  // set to false if using Rust and gdb v7.12.x (see https://github.com/cs01/gdbgui/issues/64)
+    // preferences
+    // syntax highlighting
+    themes: initial_data.themes,
+    current_theme: localStorage.getItem('theme') || initial_data.themes[0],
+    highlight_source_code: JSON.parse(localStorage.getItem('highlight_source_code')),  // get saved boolean to highlight source code
 
-        // preferences
-        // syntax highlighting
-        themes: initial_data.themes,
-        current_theme: localStorage.getItem('theme') || initial_data.themes[0],
-        highlight_source_code: JSON.parse(localStorage.getItem('highlight_source_code')),  // get saved boolean to highlight source code
+    auto_add_breakpoint_to_main: JSON.parse(localStorage.getItem('auto_add_breakpoint_to_main')),
 
-        auto_add_breakpoint_to_main: JSON.parse(localStorage.getItem('auto_add_breakpoint_to_main')),
+    pretty_print: true,  // whether gdb should "pretty print" variables. There is an option for this in Settings
+    refresh_state_after_sending_console_command: true,  // If true, send commands to refresh GUI state after each command is sent from console
+    show_all_sent_commands_in_console: debug,  // show all sent commands if in debug mode
 
-        pretty_print: true,  // whether gdb should "pretty print" variables. There is an option for this in Settings
-        refresh_state_after_sending_console_command: true,  // If true, send commands to refresh GUI state after each command is sent from console
-        show_all_sent_commands_in_console: debug,  // show all sent commands if in debug mode
+    // inferior program state
+    // choices for inferior_program are:
+    // 'running'
+    // 'paused'
+    // 'exited'
+    // undefined
+    inferior_program: undefined,
 
-        // inferior program state
-        // choices for inferior_program are:
-        // 'running'
-        // 'paused'
-        // 'exited'
-        // undefined
-        inferior_program: undefined,
+    paused_on_frame: undefined,
+    selected_frame_num: 0,
+    current_thread_id: undefined,
+    stack: [],
+    locals: [],
+    threads: [],
 
-        paused_on_frame: undefined,
-        selected_frame_num: 0,
-        current_thread_id: undefined,
-        stack: [],
-        locals: [],
-        threads: [],
+    // source files
+    source_file_paths: [], // all the paths gdb says were used to compile the target binary
+    language: 'c_family',  // assume langage of program is c or c++. Language is determined by source file paths. Used to turn on/off certain features/warnings.
+    files_being_fetched: [],
+    fullname_to_render: null,
+    current_line_of_source_code: null,
+    current_assembly_address: null,
+    rendered_source_file_fullname: null,
+    has_unrendered_assembly: false,
+    cached_source_files: [],  // list with keys fullname, source_code
 
-        // source files
-        source_file_paths: [], // all the paths gdb says were used to compile the target binary
-        language: 'c_family',  // assume langage of program is c or c++. Language is determined by source file paths. Used to turn on/off certain features/warnings.
-        files_being_fetched: [],
-        fullname_to_render: null,
-        current_line_of_source_code: null,
-        current_assembly_address: null,
-        rendered_source_file_fullname: null,
-        has_unrendered_assembly: false,
-        cached_source_files: [],  // list with keys fullname, source_code
+    // binary selection
+    inferior_binary_path: null,
+    inferior_binary_path_last_modified_unix_sec: null,
+    warning_shown_for_old_binary: false,
 
-        // binary selection
-        inferior_binary_path: null,
-        inferior_binary_path_last_modified_unix_sec: null,
-        warning_shown_for_old_binary: false,
+    // registers
+    register_names: [],
+    previous_register_values: {},
+    current_register_values: {},
 
-        // registers
-        register_names: [],
-        previous_register_values: {},
-        current_register_values: {},
+    // memory
+    memory_cache: {},
 
-        // memory
-        memory_cache: {},
+    // breakpoints
+    breakpoints: [],
 
-        // breakpoints
-        breakpoints: [],
-
-        // expressions
-        expr_gdb_parent_var_currently_fetching_children: null,  // parent gdb variable name (i.e. var7)
-        expr_being_created: null,  // the expression being created (i.e. myvar)
-        expr_autocreated_for_locals: null,  // true when an expression is being autocreated for a local, false otherwise
-        expressions: [],  // array of dicts. Key is expression, value has various keys. See Expressions component.
-    },
-    /**
-     * Set value of one of the keys in the current state.
-     * Raise error if key does not exist.
-     * If value was changed, dispatch event so other components can react.
-     */
-    set: function(key, value){
-        if(!(key in State._state)){
-            console.error(`tried to update state with key that does not exist: ${key}`)
-        }
-
-        let oldval = State._state[key]
-
-        // make new copy so reference cannot be modified
-        let _value
-        if(_.isArray(value)){
-            _value = $.extend(true, [], value)
-        }else if (_.isObject(value)){
-            _value = $.extend(true, {}, value)
-        }else{
-            _value = value
-        }
-
-        // update the state
-        State._state[key] = _value
-        if(oldval !== _value){
-            debug_print(key, ' changed from ', oldval, ' to ', _value)
-            State.dispatch_state_change(key)
-        }
-    },
-    /**
-     * Get value of one of the keys in the current state.
-     * Return a new object, not a refrence to a value.
-     */
-    get: function(key){
-        if(!_.isUndefined(arguments[1])){
-            console.error('only one argument is allowed to this function')
-        }else if(!(key in State._state)){
-            throw `tried to access a key that does not exist: ${key}`
-        }
-
-        let val = State._state[key]
-        if(_.isArray(val)){
-            return $.extend(true, [], val)
-        }else if (_.isObject(val)){
-            return $.extend(true, {}, val)
-        }else{
-            // changes to strings and integers by the calling function will
-            // not mutate the value in State, so just return the value
-            return val
-        }
-    },
-    add_source_file_to_cache: function(obj){
-        let cached_source_files = State.get('cached_source_files')
-        cached_source_files.push(obj)
-        State.set('cached_source_files', cached_source_files)
-    },
+    // expressions
+    expr_gdb_parent_var_currently_fetching_children: null,  // parent gdb variable name (i.e. var7)
+    expr_being_created: null,  // the expression being created (i.e. myvar)
+    expr_autocreated_for_locals: null,  // true when an expression is being autocreated for a local, false otherwise
+    expressions: [],  // array of dicts. Key is expression, value has various keys. See Expressions component.
 }
-/**
- * Debounce the event emission for more efficient/smoother rendering.
- * Only emit, at most, every 50 milliseconds.
- */
-State.dispatch_state_change = _.debounce((key) => {
-        debug_print('dispatching state_changed')
-        window.dispatchEvent(new CustomEvent('state_changed', {'detail': {'key_changed': key}}))
-    }, 50)
 
-const Events = {
-    clear_program_state: function(){
-        State.set('current_line_of_source_code', undefined)
-        State.set('paused_on_frame', undefined)
-        State.set('selected_frame_num', 0)
-        State.set('current_thread_id', undefined)
-        State.set('stack', [])
-        State.set('locals', [])
-    },
-    event_inferior_program_exited: function(){
-        State.set('inferior_program', 'exited')
-        State.clear_program_state()
-    },
-    event_inferior_program_running: function(){
-        State.set('inferior_program', 'running')
-        State.clear_program_state()
-    },
-    event_inferior_program_paused: function(e){
-        let frame = e.detail || {}
-        State.set('inferior_program', 'paused')
-        State.set('paused_on_frame', frame)
-        State.set('fullname_to_render', frame.fullname)
+stator.options.debug = debug
+const state = stator.create_state(initial_state)
 
-        State.set('current_line_of_source_code', frame.line)
-        State.set('current_assembly_address', frame.addr)
-    },
-    event_select_frame: function(e){
-        let selected_frame_num = e.detail || 0
-        State.set('selected_frame_num', selected_frame_num)
-    },
-}
 
 /**
  * Modal component that is hidden by default, but shown
@@ -537,8 +419,8 @@ const GdbApi = {
         });
 
         GdbApi.socket.on('gdb_pid', function(gdb_pid) {
-            State.set('gdb_pid', gdb_pid)
-            StatusBar.render(`${State.get('interpreter')} process ${gdb_pid} is running for this tab`)
+            state['gdb_pid'] = gdb_pid
+            StatusBar.render(`${state['interpreter']} process ${gdb_pid} is running for this tab`)
         });
 
         GdbApi.socket.on('disconnect', function(){
@@ -556,7 +438,7 @@ const GdbApi = {
         GdbApi.run_gdb_command('-exec-run')
     },
     inferior_is_paused: function(){
-        return ([undefined, 'paused'].indexOf(State.get('inferior_program')) >= 0)
+        return ([undefined, 'paused'].indexOf(state['inferior_program']) >= 0)
     },
     click_continue_button: function(e){
         window.dispatchEvent(new Event('event_inferior_program_running'))
@@ -642,7 +524,7 @@ const GdbApi = {
 
         // add the send command to the console to show commands that are
         // automatically run by gdb
-        if(State.get('show_all_sent_commands_in_console')){
+        if(state['show_all_sent_commands_in_console']){
             GdbConsoleComponent.add_sent_commands(cmds)
         }
 
@@ -683,10 +565,10 @@ const GdbApi = {
             // so this additional call is needed
             GdbApi.get_flush_output_cmd()
         ]
-        if(State.get('interpreter') === 'gdb'){
+        if(state['interpreter'] === 'gdb'){
             // update all user-defined variables in gdb
             cmds.push('-var-update --all-values *')
-        }else if(State.get('interpreter') === 'lldb'){
+        }else if(state['interpreter'] === 'lldb'){
             // the * arg doesn't work, so loop over all
             // names and push commands for each
             cmds = cmds.concat(Expressions.get_update_cmds())
@@ -725,15 +607,15 @@ const GdbApi = {
         })
     },
     get_insert_break_cmd: function(fullname, line){
-        if(State.get('interpreter') === 'gdb'){
-            return [`-break-insert ${State.get('rendered_source_file_fullname')}:${line}`]
+        if(state['interpreter'] === 'gdb'){
+            return [`-break-insert ${state['rendered_source_file_fullname']}:${line}`]
         }else{
             console.log('TODOLLDB - find mi-friendly command')
-            return [`breakpoint set --file ${State.get('rendered_source_file_fullname')} --line ${line}`]
+            return [`breakpoint set --file ${state['rendered_source_file_fullname']} --line ${line}`]
         }
     },
     get_delete_break_cmd: function(bkpt_num){
-        if(State.get('interpreter') === 'gdb'){
+        if(state['interpreter'] === 'gdb'){
             return `-break-delete ${bkpt_num}`
         }else{
             console.log('TODOLLDB - find mi-friendly command')
@@ -741,33 +623,33 @@ const GdbApi = {
         }
     },
     get_break_list_cmd: function(){
-        if(State.get('interpreter') === 'gdb'){
+        if(state['interpreter'] === 'gdb'){
             return '-break-list'
-        }else if(State.get('interpreter') === 'lldb'){
+        }else if(state['interpreter'] === 'lldb'){
             console.log('TODOLLDB - find mi-friendly command')
             return 'breakpoint list'
         }
     },
     get_flush_output_cmd: function(){
-        if(State.get('language') === 'c_family'){
-            if(State.get('interpreter') === 'gdb'){
+        if(state['language'] === 'c_family'){
+            if(state['interpreter'] === 'gdb'){
                 return '-data-evaluate-expression fflush(0)'
-            }else if(State.get('interpreter') === 'lldb'){
+            }else if(state['interpreter'] === 'lldb'){
                 return ''
             }
-        }else if(State.get('language') === 'go'){
+        }else if(state['language'] === 'go'){
             return ''  // TODO?
-        }else if (State.get('language') === 'rust'){
+        }else if (state['language'] === 'rust'){
             return ''  // TODO?
         }
     },
     _recieve_last_modified_unix_sec(data){
-        if(data.path === State.get('inferior_binary_path')){
-            State.set('inferior_binary_path_last_modified_unix_sec', data.last_modified_unix_sec)
+        if(data.path === state['inferior_binary_path']){
+            state['inferior_binary_path_last_modified_unix_sec'] = data.last_modified_unix_sec
         }
     },
     _error_getting_last_modified_unix_sec(data){
-        State.set('inferior_binary_path', null)
+        state['inferior_binary_path'] = null
     }
 }
 
@@ -812,7 +694,7 @@ GdbMiOutput.scroll_to_bottom = _.debounce(GdbMiOutput._scroll_to_bottom, 300, {l
 const Breakpoint = {
     el: $('#breakpoints'),
     init: function(){
-        new Reactor('#breakpoints', {}, Breakpoint.render)
+        new Reactor('#breakpoints', Breakpoint.render)
 
         $("body").on("click", ".toggle_breakpoint_enable", Breakpoint.toggle_breakpoint_enable)
     },
@@ -827,7 +709,7 @@ const Breakpoint = {
         const MAX_CHARS_TO_SHOW_FROM_SOURCE = 40
         let bkpt_html = ''
 
-        for (let b of State.get('breakpoints')){
+        for (let b of state['breakpoints']){
             let checked = b.enabled === 'y' ? 'checked' : ''
             , source_line = '(file not cached)'
 
@@ -924,7 +806,7 @@ const Breakpoint = {
         return bkpt_html
     },
     remove_breakpoint_if_present: function(fullname, line){
-        for (let b of State.get('breakpoints')){
+        for (let b of state['breakpoints']){
             if (b.fullname === fullname && b.line === line){
                 let cmd = [GdbApi.get_delete_break_cmd(b.number), GdbApi.get_break_list_cmd()]
                 GdbApi.run_gdb_command(cmd)
@@ -935,13 +817,13 @@ const Breakpoint = {
         return `<a class="gdb_cmd pointer" data-cmd0="${GdbApi.get_delete_break_cmd(breakpoint_number)}" data-cmd1="${GdbApi.get_break_list_cmd()}">${text}</a>`
     },
     get_breakpoint_lines_for_file: function(fullname){
-        return State.get('breakpoints').filter(b => (b.fullname_to_display === fullname) && b.enabled === 'y').map(b => parseInt(b.line))
+        return state['breakpoints'].filter(b => (b.fullname_to_display === fullname) && b.enabled === 'y').map(b => parseInt(b.line))
     },
     get_disabled_breakpoint_lines_for_file: function(fullname){
-        return State.get('breakpoints').filter(b => (b.fullname_to_display === fullname) && b.enabled !== 'y').map(b => parseInt(b.line))
+        return state['breakpoints'].filter(b => (b.fullname_to_display === fullname) && b.enabled !== 'y').map(b => parseInt(b.line))
     },
     save_breakpoints: function(payload){
-        State.set('breakpoints', [])
+        state['breakpoints'] = []
         if(payload && payload.BreakpointTable && payload.BreakpointTable.body){
             for (let breakpoint of payload.BreakpointTable.body){
                 Breakpoint.save_breakpoint(breakpoint)
@@ -974,10 +856,10 @@ const Breakpoint = {
         }
 
         // add the breakpoint if it's not stored already
-        let bkpts = State.get('breakpoints')
+        let bkpts = state['breakpoints']
         if(bkpts.indexOf(bkpt) === -1){
             bkpts.push(bkpt)
-            State.set('breakpoints', bkpts)
+            state['breakpoints'] = bkpts
         }
         return bkpt
     },
@@ -992,7 +874,7 @@ const SourceCode = {
     el_jump_to_line_input: $('#jump_to_line'),
     init: function(){
 
-        new Reactor('#code_table', {after_render: SourceCode.after_render}, SourceCode.render)
+        new Reactor('#code_table', SourceCode.render, {after_render: SourceCode.after_render})
 
         $("body").on("click", ".srccode td.line_num", SourceCode.click_gutter)
         $("body").on("click", ".view_file", SourceCode.click_view_file)
@@ -1013,19 +895,19 @@ const SourceCode = {
         let line = e.currentTarget.dataset.line
         if(e.currentTarget.classList.contains('breakpoint') || e.currentTarget.classList.contains('breakpoint_disabled')){
             // clicked gutter with a breakpoint, remove it
-            Breakpoint.remove_breakpoint_if_present(State.get('rendered_source_file_fullname'), line)
+            Breakpoint.remove_breakpoint_if_present(state['rendered_source_file_fullname'], line)
 
         }else{
             // clicked with no breakpoint, add it, and list all breakpoints to make sure breakpoint table is up to date
-            let fullname = State.get('rendered_source_file_fullname')
+            let fullname = state['rendered_source_file_fullname']
             GdbApi.run_gdb_command(GdbApi.get_insert_break_cmd(fullname, line))
         }
     },
     is_cached: function(fullname){
-        return State.get('cached_source_files').some(f => f.fullname === fullname)
+        return state['cached_source_files'].some(f => f.fullname === fullname)
     },
     get_cached_assembly_for_file: function(fullname){
-        for(let file of State.get('cached_source_files')){
+        for(let file of state['cached_source_files']){
             if(file.fullname === fullname){
                 return file.assembly
             }
@@ -1037,8 +919,8 @@ const SourceCode = {
         SourceCode.render()
     },
     clear_cached_source_files: function(){
-        State.set('rendered_source_file_fullname', null)
-        State.set('cached_source_files', [])
+        state['rendered_source_file_fullname'] = null
+        state['cached_source_files'] = []
     },
     /**
      * Return html that can be displayed alongside source code
@@ -1078,15 +960,15 @@ const SourceCode = {
      */
     show_modal_if_file_modified_after_binary(fullname){
         let obj = SourceCode.get_source_file_obj_from_cache(fullname)
-        if(obj && State.get('inferior_binary_path')){
-            if((obj.last_modified_unix_sec > State.get('inferior_binary_path_last_modified_unix_sec'))
-                    && State.get('warning_shown_for_old_binary') !== true){
+        if(obj && state['inferior_binary_path']){
+            if((obj.last_modified_unix_sec > state['inferior_binary_path_last_modified_unix_sec'])
+                    && state['warning_shown_for_old_binary'] !== true){
                 Modal.render('Warning', `A source file was modified <bold>after</bold> the binary was compiled. Recompile the binary, then try again. Otherwise the source code may not
                     match the binary.
                     <p>
                     <p>Source file: ${fullname}, modified ${moment(obj.last_modified_unix_sec * 1000).format(DATE_FORMAT)}
-                    <p>Binary: ${State.get('inferior_binary_path')}, modified ${moment(State.get('inferior_binary_path_last_modified_unix_sec') * 1000).format(DATE_FORMAT)}`)
-                State.set('warning_shown_for_old_binary', true)
+                    <p>Binary: ${state['inferior_binary_path']}, modified ${moment(state['inferior_binary_path_last_modified_unix_sec'] * 1000).format(DATE_FORMAT)}`)
+                state['warning_shown_for_old_binary'] = true
             }
         }
     },
@@ -1101,10 +983,10 @@ const SourceCode = {
     set_theme_in_dom: function(){
         let code_container = SourceCode.el_code_container
         , old_theme = code_container.data('theme')
-        , current_theme = State.get('current_theme')
-        if(State.get('themes').indexOf(current_theme) === -1){
+        , current_theme = state['current_theme']
+        if(state['themes'].indexOf(current_theme) === -1){
             // somehow an invalid theme got set, update with a valid one
-            State.set('current_theme', State.get('themese')[0])
+            state['current_theme'] = state['themese'][0]
         }
 
         if(old_theme !== current_theme){
@@ -1114,12 +996,12 @@ const SourceCode = {
         }
     },
     should_render: function(reactor){
-        let fullname = State.get('fullname_to_render')
+        let fullname = state['fullname_to_render']
         // don't re-render all the lines if they are already rendered.
         // just update breakpoints and line highlighting
-        if(fullname === State.get('rendered_source_file_fullname') && !State.get('has_unrendered_assembly')) {
+        if(fullname === state['rendered_source_file_fullname'] && !state['has_unrendered_assembly']) {
             // we already rendered this file, and the assembly, so don't re-render it
-            SourceCode.highlight_paused_line_and_scrollto_line(fullname, State.get('current_line_of_source_code'), addr)
+            SourceCode.highlight_paused_line_and_scrollto_line(fullname, state['current_line_of_source_code'], addr)
             SourceCode.render_breakpoints()
             SourceCode.make_current_line_visible()
             return false
@@ -1129,29 +1011,29 @@ const SourceCode = {
     render: function(reactor){
         SourceCode.set_theme_in_dom()
 
-        if(State.get('fullname_to_render') === null){
-            State.set('rendered_source_file_fullname', null)
+        if(state['fullname_to_render'] === null){
+            state['rendered_source_file_fullname'] = null
             return ''
-        }else if(!SourceCode.is_cached(State.get('fullname_to_render'))){
-            SourceCode.fetch_file(State.get('fullname_to_render'))
-            State.set('rendered_source_file_fullname', null)
+        }else if(!SourceCode.is_cached(state['fullname_to_render'])){
+            SourceCode.fetch_file(state['fullname_to_render'])
+            state['rendered_source_file_fullname'] = null
             return ''
         }
 
-        let fullname = State.get('fullname_to_render')
-        , current_line_of_source_code = parseInt(State.get('current_line_of_source_code'))
-        , addr = State.get('current_assembly_address')
+        let fullname = state['fullname_to_render']
+        , current_line_of_source_code = parseInt(state['current_line_of_source_code'])
+        , addr = state['current_assembly_address']
 
-        let f = _.find(State.get('cached_source_files'), i => i.fullname === fullname)
+        let f = _.find(state['cached_source_files'], i => i.fullname === fullname)
         let source_code = f.source_code
 
         // make sure desired line is within number of lines of source code
         if(current_line_of_source_code > source_code.length){
             SourceCode.el_jump_to_line_input.val(source_code.length)
-            State.set('current_line_of_source_code', source_code.length)
+            state['current_line_of_source_code'] = source_code.length
         }else if (current_line_of_source_code <= 0){
             SourceCode.el_jump_to_line_input.val(1)
-            State.set('current_line_of_source_code', 1)
+            state['current_line_of_source_code'] = 1
         }
 
         SourceCode.show_modal_if_file_modified_after_binary(fullname)
@@ -1179,23 +1061,23 @@ const SourceCode = {
             line_num++;
         }
 
-        State.set('rendered_source_file_fullname', fullname)
+        state['rendered_source_file_fullname'] = fullname
         SourceCode.el_title.text(fullname)
         return tbody.join('')
     },
     after_render: function(reactor){
         SourceCode.render_breakpoints()
         SourceCode.highlight_paused_line_and_scrollto_line()
-        State.set('has_unrendered_assembly', false)
+        state['has_unrendered_assembly'] = false
     },
     // re-render breakpoints on whichever file is loaded
     render_breakpoints: function(){
         document.querySelectorAll('.line_num.breakpoint').forEach(el => el.classList.remove('breakpoint'))
         document.querySelectorAll('.line_num.disabled_breakpoint').forEach(el => el.classList.remove('disabled_breakpoint'))
-        if(_.isString(State.get('rendered_source_file_fullname'))){
+        if(_.isString(state['rendered_source_file_fullname'])){
 
-            let bkpt_lines = Breakpoint.get_breakpoint_lines_for_file(State.get('rendered_source_file_fullname'))
-            , disabled_breakpoint_lines = Breakpoint.get_disabled_breakpoint_lines_for_file(State.get('rendered_source_file_fullname'))
+            let bkpt_lines = Breakpoint.get_breakpoint_lines_for_file(state['rendered_source_file_fullname'])
+            , disabled_breakpoint_lines = Breakpoint.get_disabled_breakpoint_lines_for_file(state['rendered_source_file_fullname'])
 
             for(let bkpt_line of bkpt_lines){
                 let js_line = $(`td.line_num[data-line=${bkpt_line}]`)[0]
@@ -1250,15 +1132,15 @@ const SourceCode = {
     highlight_paused_line_and_scrollto_line: function(){
         SourceCode.remove_line_highlights()
 
-        let fullname = State.get('rendered_source_file_fullname')
-        , line_num = State.get('current_line_of_source_code')
-        , addr = State.get('current_assembly_address')
-        , inferior_program_is_paused_in_this_file = _.isObject(State.get('paused_on_frame')) && State.get('paused_on_frame').fullname === fullname
-        , paused_on_current_line = (inferior_program_is_paused_in_this_file && parseInt(State.get('paused_on_frame').line) === parseInt(line_num))
+        let fullname = state['rendered_source_file_fullname']
+        , line_num = state['current_line_of_source_code']
+        , addr = state['current_assembly_address']
+        , inferior_program_is_paused_in_this_file = _.isObject(state['paused_on_frame']) && state['paused_on_frame'].fullname === fullname
+        , paused_on_current_line = (inferior_program_is_paused_in_this_file && parseInt(state['paused_on_frame'].line) === parseInt(line_num))
 
         // make background blue if gdb is paused on a line in this file
         if(inferior_program_is_paused_in_this_file){
-            let jq_line = $(`.loc[data-line=${State.get('paused_on_frame').line}]`)
+            let jq_line = $(`.loc[data-line=${state['paused_on_frame'].line}]`)
             if(jq_line.length === 1){
                 jq_line.offset()  // needed so DOM registers change and re-draws animation
                 jq_line.addClass('paused_on_line')
@@ -1295,21 +1177,20 @@ const SourceCode = {
             // this can happen when an executable doesn't have debug symbols.
             // don't try to fetch it because it will never exist.
             return
-        }else if(State.get('files_being_fetched').indexOf(fullname) === -1){
-            let files = State.get('files_being_fetched')
+        }else if(state['files_being_fetched'].indexOf(fullname) === -1){
+            let files = state['files_being_fetched']
             files.push(fullname)
-            State.set('files_being_fetched', files)
+            state['files_being_fetched'] = files
         }else{
             // this file is already being fetched
             return
         }
 
-        debug_print('fetching '+ fullname)
         $.ajax({
             url: "/read_file",
             cache: false,
             type: 'GET',
-            data: {path: fullname, highlight: State.get('highlight_source_code')},
+            data: {path: fullname, highlight: state['highlight_source_code']},
             success: function(response){
                 SourceCode.add_source_file_to_cache(fullname, response.source_code, {}, response.last_modified_unix_sec)
             },
@@ -1319,17 +1200,22 @@ const SourceCode = {
                 SourceCode.add_source_file_to_cache(fullname, source_code, {}, 0)
             },
             complete: function(){
-                let files = State.get('files_being_fetched')
-                State.set('files_being_fetched', _.without(files, fullname))
+                let files = state['files_being_fetched']
+                state['files_being_fetched'] = _.without(files, fullname)
             }
         })
     },
     add_source_file_to_cache: function(fullname, source_code, assembly, last_modified_unix_sec){
-        State.add_source_file_to_cache({'fullname': fullname, 'source_code': source_code, 'assembly': assembly,
-            'last_modified_unix_sec': last_modified_unix_sec})
+        let new_source_file = {'fullname': fullname,
+                                'source_code': source_code,
+                                'assembly': assembly,
+                                'last_modified_unix_sec': last_modified_unix_sec}
+        , cached_source_files = state['cached_source_files']
+        cached_source_files.push(new_source_file)
+        state['cached_source_files'] = cached_source_files
     },
     get_source_file_obj_from_cache(fullname){
-        for(let sf of State.get('cached_source_files')){
+        for(let sf of state['cached_source_files']){
             if (sf.fullname === fullname){
                 return sf
             }
@@ -1346,9 +1232,9 @@ const SourceCode = {
         if(gdb_version_array.length === 0){
             // assuming new version, but we shouldn't ever not know the version...
             return 4
-        } else if (gdb_version_array[0] < 7 || (gdb_version_array[0] == 7 && gdb_version_array[1] <= 7)){
+
+        } else if (gdb_version_array[0] < 7 || (parseInt(gdb_version_array[0]) === 7 && gdb_version_array[1] <= 7)){
             // this option has been deprecated in newer versions, but is required in older ones
-            //
             return 3
         }else{
             return 4
@@ -1356,8 +1242,8 @@ const SourceCode = {
     },
     get_fetch_disassembly_command: function(fullname, start_line){
         if(_.isString(fullname) && fullname.startsWith('/')){
-            if(State.get('interpreter') === 'gdb'){
-                let mi_response_format = SourceCode.get_dissasembly_format_num(State.get('gdb_version_array'))
+            if(state['interpreter'] === 'gdb'){
+                let mi_response_format = SourceCode.get_dissasembly_format_num(state['gdb_version_array'])
                 return `-data-disassemble -f ${fullname} -l ${start_line} -n 100 -- ${mi_response_format}`
             }else{
                 console.log('TODOLLDB - get mi command to disassemble')
@@ -1372,8 +1258,8 @@ const SourceCode = {
      * Fetch disassembly for current file/line.
      */
     fetch_assembly_cur_line: function(e){
-        let fullname = State.get('fullname_to_render')
-        , line = parseInt(State.get('current_line_of_source_code'))
+        let fullname = state['fullname_to_render']
+        , line = parseInt(state['current_line_of_source_code'])
         SourceCode.fetch_disassembly(fullname, line)
     },
     fetch_disassembly: function(fullname, start_line){
@@ -1396,15 +1282,15 @@ const SourceCode = {
         }
 
         let fullname = mi_assembly[0].fullname
-        let cached_source_files = State.get('cached_source_files')
+        let cached_source_files = state['cached_source_files']
         for (let cached_file of cached_source_files){
             if(cached_file.fullname === fullname){
                 cached_file.assembly = $.extend(true, cached_file.assembly, assembly_to_save)
-                State.set('cached_source_files', cached_source_files)
+                state['cached_source_files'] = cached_source_files
                 break
             }
         }
-        State.set('has_unrendered_assembly', true)
+        state['has_unrendered_assembly'] = true
     },
     /**
      * Something in DOM triggered this callback to view a file.
@@ -1414,14 +1300,14 @@ const SourceCode = {
      * hightlight (default: 'false'): if 'true', the line is highlighted
      */
     click_view_file: function(e){
-        State.set('fullname_to_render', e.currentTarget.dataset['fullname'])
-        State.set('current_line_of_source_code', e.currentTarget.dataset['line'])
-        State.set('current_assembly_address', e.currentTarget.dataset['addr'])
+        state['fullname_to_render'] = e.currentTarget.dataset['fullname']
+        state['current_line_of_source_code'] = parseInt(e.currentTarget.dataset['line'])
+        state['current_assembly_address'] = e.currentTarget.dataset['addr']
     },
     keydown_jump_to_line: function(e){
         if (e.keyCode === ENTER_BUTTON_NUM){
-            let line = e.currentTarget.value
-            State.set('current_line_of_source_code', line)
+            let line = parseInt(e.currentTarget.value)
+            state['current_line_of_source_code'] = line
         }
     },
     get_attrs_to_view_file: function(fullname, line=0, addr=''){
@@ -1445,7 +1331,7 @@ const SourceCode = {
 const SourceFileAutocomplete = {
     el: $('#source_file_input'),
     init: function(){
-        stator.add_listener(SourceFileAutocomplete.render)
+        stator.subscribe(SourceFileAutocomplete.render)
 
         SourceFileAutocomplete.el.keyup(SourceFileAutocomplete.keyup_source_file_input)
 
@@ -1461,7 +1347,7 @@ const SourceFileAutocomplete = {
         // when dropdown button is clicked, toggle showing/hiding it
         Awesomplete.$('#source_file_dropdown_button').addEventListener("click", function() {
 
-            if(State.get('source_file_paths').length === 0){
+            if(state['source_file_paths'].length === 0){
                 // we have not asked gdb to get the list of source paths yet, or it just doesn't have any.
                 // request that gdb populate this list.
                 SourceFileAutocomplete.fetch_source_files()
@@ -1482,18 +1368,18 @@ const SourceFileAutocomplete = {
         // perform action when an item is selected
          Awesomplete.$('#source_file_input').addEventListener('awesomplete-selectcomplete', function(e){
             let fullname = e.currentTarget.value
-            State.set('fullname_to_render', fullname)
-            State.set('current_line_of_source_code', 1)
-            State.set('current_assembly_address', '')
+            state['fullname_to_render'] = fullname
+            state['current_line_of_source_code'] = 1
+            state['current_assembly_address'] = ''
         })
     },
     fetch_source_files: function(){
-        State.set('source_file_paths', [`${ANIMATED_REFRESH_ICON} fetching source files for inferior program`])
+        state['source_file_paths'] = [`${ANIMATED_REFRESH_ICON} fetching source files for inferior program`]
         GdbApi.run_gdb_command('-file-list-exec-source-files')
     },
     render: function(e){
-        if(!_.isEqual(SourceFileAutocomplete.input._list, State.get('source_file_paths'))){
-            SourceFileAutocomplete.input.list = State.get('source_file_paths')
+        if(!_.isEqual(SourceFileAutocomplete.input._list, state['source_file_paths'])){
+            SourceFileAutocomplete.input.list = state['source_file_paths']
             SourceFileAutocomplete.input.evaluate()
         }
     },
@@ -1511,10 +1397,10 @@ const SourceFileAutocomplete = {
 
             [fullname, line] = Util.parse_fullname_and_line(user_input, default_line)
 
-            State.set('fullname_to_render',fullname)
-            State.set('current_line_of_source_code', line)
-            State.set('current_assembly_address', '')
-        }else if (State.get('source_file_paths').length === 0){
+            state['fullname_to_render'] =fullname
+            state['current_line_of_source_code'] = line
+            state['current_assembly_address'] = ''
+        }else if (state['source_file_paths'].length === 0){
             // source file list has not been fetched yet, so fetch it
             SourceFileAutocomplete.fetch_source_files()
         }
@@ -1526,14 +1412,14 @@ const SourceFileAutocomplete = {
  */
 const Registers = {
     init: function(){
-        new Reactor('#registers', {}, Registers.render)
+        new Reactor('#registers', Registers.render)
         window.addEventListener('event_inferior_program_exited', Registers.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', Registers.event_inferior_program_running)
     },
     get_update_cmds: function(){
         let cmds = []
-        if(State.get('can_fetch_register_values') === true){
-            if(State.get('register_names').length === 0){
+        if(state['can_fetch_register_values'] === true){
+            if(state['register_names'].length === 0){
                 // only fetch register names when we don't have them
                 // assumption is that the names don't change over time
                 cmds.push('-data-list-register-names')
@@ -1547,11 +1433,11 @@ const Registers = {
     },
     cache_register_names: function(names){
         // filter out non-empty names
-        State.set('register_names', names.filter(name => name))
+        state['register_names'] = names.filter(name => name)
     },
     clear_cached_values: function(){
-        State.set('previous_register_values', {})
-        State.set('current_register_values', {})
+        state['previous_register_values'] = {}
+        state['current_register_values'] = {}
     },
     event_inferior_program_exited: function(){
         Registers.clear_cached_values()
@@ -1560,14 +1446,14 @@ const Registers = {
         // Registers.render_not_paused()
     },
     render: function(){
-        if(State.get('register_names').length === Object.keys(State.get('current_register_values')).length){
+        if(state['register_names'].length === Object.keys(state['current_register_values']).length){
             let columns = ['name', 'value (hex)', 'value (decimal)']
             , register_table_data = []
             , hex_val_raw = ''
 
-            for (let i in State.get('register_names')){
-                let name = State.get('register_names')[i]
-                    , obj = _.find(State.get('current_register_values'), v => v['number'] === i)
+            for (let i in state['register_names']){
+                let name = state['register_names'][i]
+                    , obj = _.find(state['current_register_values'], v => v['number'] === i)
                     , hex_val_raw = ''
                     , disp_hex_val = ''
                     , disp_dec_val = ''
@@ -1575,7 +1461,7 @@ const Registers = {
                 if (obj){
                     hex_val_raw = obj['value']
 
-                    let old_obj = _.find(State.get('previous_register_values'), v => v['number'] === i)
+                    let old_obj = _.find(state['previous_register_values'], v => v['number'] === i)
                     , old_hex_val_raw
                     , changed = false
                     if(old_obj) {old_hex_val_raw = old_obj['value']}
@@ -1616,7 +1502,7 @@ const Settings = {
     el: $('#gdbgui_settings_button'),
     pane: $('#settings_container'),
     init: function(){
-        new Reactor('#settings_body', {}, Settings.render)
+        new Reactor('#settings_body', Settings.render)
 
         $('body').on('change', '#theme_selector', Settings.theme_selection_changed)
         $('body').on('change', '#syntax_highlight_selector', Settings.syntax_highlight_selector_changed)
@@ -1630,29 +1516,29 @@ const Settings = {
         // Fetch the latest version only if using in normal mode. If debugging, we tend to
         // refresh quite a bit, which might make too many requests to github and cause them
         // to block our ip? Either way it just seems weird to make so many ajax requests.
-        if(!State.get('debug')){
+        if(!state['debug']){
             // fetch version
             $.ajax({
                 url: "https://raw.githubusercontent.com/cs01/gdbgui/master/gdbgui/VERSION.txt",
                 cache: false,
                 method: 'GET',
                 success: (data) => {
-                    State.set('latest_gdbgui_version', _.trim(data))
+                    state['latest_gdbgui_version'] = _.trim(data)
 
-                    if(Settings.needs_to_update_gdbgui_version() && State.get('show_gdbgui_upgrades')){
+                    if(Settings.needs_to_update_gdbgui_version() && state['show_gdbgui_upgrades']){
                         Modal.render(`Update Available`, Settings.get_upgrade_text())
                     }
                 },
-                error: (data) => {State.set('latest_gdbgui_version', '(could not contact server)')},
+                error: (data) => {state['latest_gdbgui_version'] = '(could not contact server)'}
             })
         }
     },
     needs_to_update_gdbgui_version: function(){
-        return State.get('latest_gdbgui_version') !== State.get('gdbgui_version')
+        return state['latest_gdbgui_version'] !== state['gdbgui_version']
     },
     get_upgrade_text: function(){
         if(Settings.needs_to_update_gdbgui_version()){
-            return `gdbgui version ${State.get('latest_gdbgui_version')} is available. You are using ${State.get('gdbgui_version')}. <p><p>
+            return `gdbgui version ${state['latest_gdbgui_version']} is available. You are using ${state['gdbgui_version']}. <p><p>
             To upgrade:<p>
             Linux: <br>
             <span class='monospace bold'>sudo pip install gdbgui --upgrade</span><p>
@@ -1661,14 +1547,14 @@ const Settings = {
             virtualenv users do not need the "sudo" prefix.
             `
         }else{
-            return `gdbgui version ${State.get('gdbgui_version')} (latest version)`
+            return `gdbgui version ${state['gdbgui_version']} (latest version)`
         }
     },
     render: function(){
         let theme_options = ''
-        , current_theme = State.get('current_theme')
+        , current_theme = state['current_theme']
 
-        for(let theme of State.get('themes')){
+        for(let theme of state['themes']){
             if(theme === current_theme){
                 theme_options += `<option selected value=${theme}>${theme}</option>`
             }else{
@@ -1681,7 +1567,7 @@ const Settings = {
             <tr><td>
                 <div class=checkbox>
                     <label>
-                        <input id=checkbox_auto_add_breakpoint_to_main type='checkbox' ${State.get('auto_add_breakpoint_to_main') ? 'checked' : ''}>
+                        <input id=checkbox_auto_add_breakpoint_to_main type='checkbox' ${state['auto_add_breakpoint_to_main'] ? 'checked' : ''}>
                         Auto add breakpoint to main
                     </label>
                 </div>
@@ -1689,7 +1575,7 @@ const Settings = {
             <tr><td>
                 <div class=checkbox>
                     <label>
-                        <input id=pretty_print type='checkbox' ${State.get('pretty_print') ? 'checked' : ''}>
+                        <input id=pretty_print type='checkbox' ${state['pretty_print'] ? 'checked' : ''}>
                         Pretty print dynamic variables (shows human readable values rather than internal methods)
                     </label>
                 </div>
@@ -1697,7 +1583,7 @@ const Settings = {
             <tr><td>
                 <div class=checkbox>
                     <label>
-                        <input id=refresh_state_after_sending_console_command type='checkbox' ${State.get('refresh_state_after_sending_console_command') ? 'checked' : ''}>
+                        <input id=refresh_state_after_sending_console_command type='checkbox' ${state['refresh_state_after_sending_console_command'] ? 'checked' : ''}>
                         Refresh state after sending command from the console widget
                     </label>
                 </div>
@@ -1706,7 +1592,7 @@ const Settings = {
             <tr><td>
                 <div class=checkbox>
                     <label>
-                        <input id=show_all_sent_commands_in_console type='checkbox' ${State.get('show_all_sent_commands_in_console') ? 'checked' : ''}>
+                        <input id=show_all_sent_commands_in_console type='checkbox' ${state['show_all_sent_commands_in_console'] ? 'checked' : ''}>
                         Show all sent commands in console
                     </label>
                 </div>
@@ -1717,16 +1603,16 @@ const Settings = {
             <tr><td>
                 Syntax Highlighting:
                     <select id=syntax_highlight_selector>
-                        <option value='on' ${State.get('highlight_source_code') === true ? 'selected' : ''} >on</option>
-                        <option value='off' ${State.get('highlight_source_code') === false ? 'selected' : ''} >off</option>
+                        <option value='on' ${state['highlight_source_code'] === true ? 'selected' : ''} >on</option>
+                        <option value='off' ${state['highlight_source_code'] === false ? 'selected' : ''} >off</option>
                     </select>
                      (better performance for large files when off)
 
             <tr><td>
-                gdb version: ${State.get('gdb_version')}
+                gdb version: ${state['gdb_version']}
 
             <tr><td>
-                gdb pid for this tab: ${State.get('gdb_pid')}
+                gdb pid for this tab: ${state['gdb_pid']}
 
             <tr><td>
                 ${Settings.get_upgrade_text()}
@@ -1744,22 +1630,22 @@ const Settings = {
         }
     },
     theme_selection_changed: function(e){
-        State.set('current_theme', e.currentTarget.value)
+        state['current_theme'] = e.currentTarget.value
         localStorage.setItem('theme', e.currentTarget.value)
     },
     syntax_highlight_selector_changed: function(e){
         // update preference in state
-        State.set('highlight_source_code', e.currentTarget.value === 'on')
+        state['highlight_source_code'] = e.currentTarget.value === 'on'
         // remove all cached source files, since the cache contains syntax highlighting, or is lacking it
-        State.set('cached_source_files', [])
-        State.set('rendered_source_file_fullname', null)
+        state['cached_source_files'] = []
+        state['rendered_source_file_fullname'] = null
         // save preference for later
-        localStorage.setItem('highlight_source_code', JSON.stringify(State.get('highlight_source_code')))
+        localStorage.setItem('highlight_source_code', JSON.stringify(state['highlight_source_code']))
     },
     checkbox_auto_add_breakpoint_to_main_changed: function(){
         let checked = $('#checkbox_auto_add_breakpoint_to_main').prop('checked')
-        State.set('auto_add_breakpoint_to_main', checked)
-        localStorage.setItem('auto_add_breakpoint_to_main', JSON.stringify(State.get('auto_add_breakpoint_to_main')))
+        state['auto_add_breakpoint_to_main'] = checked
+        localStorage.setItem('auto_add_breakpoint_to_main', JSON.stringify(state['auto_add_breakpoint_to_main']))
     },
     update_state_from_checkbox_and_id: function(e){
         let key = e.target.id  // must be an existing key in State
@@ -1820,8 +1706,8 @@ const BinaryLoader = {
         BinaryLoader.render_past_binary_options_datalist()
 
         // remove list of source files associated with the loaded binary since we're loading a new one
-        State.set('source_file_paths', [])
-        State.set('language', 'c_family')
+        state['source_file_paths'] = []
+        state['language'] = 'c_family'
 
         // find the binary and arguments so gdb can be told which is which
         let binary, args, cmds
@@ -1841,7 +1727,7 @@ const BinaryLoader = {
                 ]
 
         // add breakpoint if we don't already have one
-        if(State.get('auto_add_breakpoint_to_main')){
+        if(state['auto_add_breakpoint_to_main']){
             cmds.push('-break-insert main')
         }
         cmds.push(GdbApi.get_break_list_cmd())
@@ -1849,7 +1735,7 @@ const BinaryLoader = {
         window.dispatchEvent(new Event('event_inferior_program_exited'))
         GdbApi.run_gdb_command(cmds)
 
-        State.set('inferior_binary_path', binary)
+        state['inferior_binary_path'] = binary
         GdbApi.get_inferior_binary_last_modified_unix_sec(binary)
     },
     render: function(binary){
@@ -1903,7 +1789,7 @@ const GdbCommandInput = {
         GdbCommandInput.sent_cmds.push(cmd)
         GdbConsoleComponent.add_sent_commands(cmd)
         GdbCommandInput.clear()
-        if(State.get('refresh_state_after_sending_console_command')){
+        if(state['refresh_state_after_sending_console_command']){
             GdbApi.run_command_and_refresh_state(cmd)
         }else{
             GdbApi.run_gdb_command(cmd)
@@ -1937,7 +1823,7 @@ const Memory = {
     MAX_ADDRESS_DELTA_BYTES: 1000,
     DEFAULT_ADDRESS_DELTA_BYTES: 31,
     init: function(){
-        new Reactor('#memory', {}, Memory.render)
+        new Reactor('#memory', Memory.render)
 
         $("body").on("click", ".memory_address", Memory.click_memory_address)
         $("body").on("click", "#read_preceding_memory", Memory.click_read_preceding_memory)
@@ -2026,7 +1912,7 @@ const Memory = {
      * when memory is being received from gdb at a high rate.
      */
     render: function(){
-        if(_.keys(State.get('memory_cache')).length === 0){
+        if(_.keys(state['memory_cache']).length === 0){
             return '<span class=placeholder>no memory to display</span>'
         }
 
@@ -2040,14 +1926,14 @@ const Memory = {
         bytes_per_line = Math.max(bytes_per_line, 1)
         $('#memory_bytes_per_line').val(bytes_per_line)
 
-        if(Object.keys(State.get('memory_cache')).length > 0){
+        if(Object.keys(state['memory_cache']).length > 0){
             data.push(['<span id=read_preceding_memory class=pointer style="font-style:italic; font-size: 0.8em;">more</span>',
                         '',
                         '']
             )
         }
 
-        for (let hex_addr in State.get('memory_cache')){
+        for (let hex_addr in state['memory_cache']){
             if(!hex_addr_to_display){
                 hex_addr_to_display = hex_addr
             }
@@ -2065,7 +1951,7 @@ const Memory = {
                 char_vals_for_this_addr = []
 
             }
-            let hex_value = State.get('memory_cache')[hex_addr]
+            let hex_value = state['memory_cache'][hex_addr]
             hex_vals_for_this_addr.push(hex_value)
             let char = String.fromCharCode(parseInt(hex_value, 16)).replace(/\W/g, '.')
             char_vals_for_this_addr.push(`<span class='memory_char'>${char}</span>`)
@@ -2082,7 +1968,7 @@ const Memory = {
 
         }
 
-        if(Object.keys(State.get('memory_cache')).length > 0){
+        if(Object.keys(state['memory_cache']).length > 0){
             data.push(['<span id=read_more_memory class=pointer style="font-style:italic; font-size: 0.8em;">more</span>',
                         '',
                         '']
@@ -2109,12 +1995,12 @@ const Memory = {
         // i.e. 0x000123 turns to
         // 0x123
         let hex_str_truncated = '0x' + (parseInt(hex_str, 16)).toString(16)
-        let cache = State.get('memory_cache')
+        let cache = state['memory_cache']
         cache[hex_str_truncated] = hex_val
-        State.set('memory_cache', cache)
+        state['memory_cache'] = cache
     },
     clear_cache: function(){
-        State.set('memory_cache', {})
+        state['memory_cache'] = {}
     },
     event_inferior_program_exited: function(){
         Memory.clear_cache()
@@ -2142,7 +2028,7 @@ const Expressions = {
         // create new var when enter is pressed
         Expressions.el_input.keydown(Expressions.keydown_on_input)
 
-        new Reactor('#expressions', {after_render: Expressions.after_render}, Expressions.render)
+        new Reactor('#expressions', Expressions.render, {after_render: Expressions.after_render})
 
         // remove var when icon is clicked
         $("body").on("click", ".delete_gdb_variable", Expressions.click_delete_gdb_variable)
@@ -2155,9 +2041,9 @@ const Expressions = {
     save_new_expression: function(expression, expr_autocreated_for_locals, obj){
         let new_obj = Expressions.prepare_gdb_obj_for_storage(obj, expr_autocreated_for_locals)
         new_obj.expression = expression
-        let expressions = State.get('expressions')
+        let expressions = state['expressions']
         expressions.push(new_obj)
-        State.set('expressions', expressions)
+        state['expressions'] = expressions
     },
     /**
      * Get child variable with a particular name
@@ -2225,8 +2111,8 @@ const Expressions = {
      * a unique variable name.
      */
     create_variable: function(expression, expr_autocreated_for_locals){
-        State.set('expr_being_created', expression)
-        State.set('expr_autocreated_for_locals', expr_autocreated_for_locals)
+        state['expr_being_created'] = expression
+        state['expr_autocreated_for_locals'] = expr_autocreated_for_locals
 
         // - means auto assign variable name in gdb
         // * means evaluate it at the current frame
@@ -2234,7 +2120,7 @@ const Expressions = {
             expression = '"' + expression + '"'
         }
         let cmds = []
-        if(State.get('pretty_print')){
+        if(state['pretty_print']){
             cmds.push('-enable-pretty-printing')
         }
 
@@ -2264,7 +2150,7 @@ const Expressions = {
         // it is returned when the variables are updated
         // it is returned by gdb mi as a string, and we assume it starts out in scope
         new_obj.in_scope = 'true'
-        new_obj.autocreated_for_locals = State.get('expr_autocreated_for_locals')
+        new_obj.autocreated_for_locals = state['expr_autocreated_for_locals']
 
         // can only be plotted if: value is an expression (not a local), and value is numeric
         new_obj.can_plot = !new_obj.autocreated_for_locals && !window.isNaN(parseFloat(new_obj.value))
@@ -2293,7 +2179,7 @@ const Expressions = {
      * @param r (object): gdb mi object
      */
     gdb_created_root_variable: function(r){
-        let expr = State.get('expr_being_created')
+        let expr = state['expr_being_created']
         if(expr){
             // example payload:
             // "payload": {
@@ -2304,8 +2190,8 @@ const Expressions = {
             //      "type": "int",
             //      "value": "0"
             //  },
-            Expressions.save_new_expression(expr, State.get('expr_autocreated_for_locals'), r.payload)
-            State.set('expr_being_created', null)
+            Expressions.save_new_expression(expr, state['expr_autocreated_for_locals'], r.payload)
+            state['expr_being_created'] = null
             // automatically fetch first level of children for root variables
             Expressions.fetch_and_show_children_for_var(r.payload.name)
         }else{
@@ -2343,20 +2229,20 @@ const Expressions = {
         //         ]
         //     }
 
-        let parent_name = State.get('expr_gdb_parent_var_currently_fetching_children')
-        , autocreated_for_locals = State.get('expr_autocreated_for_locals')
+        let parent_name = state['expr_gdb_parent_var_currently_fetching_children']
+        , autocreated_for_locals = state['expr_autocreated_for_locals']
 
-        State.set('expr_gdb_parent_var_currently_fetching_children', null)
+        state['expr_gdb_parent_var_currently_fetching_children'] = null
 
         // get the parent object of these children
-        let expressions = State.get('expressions')
+        let expressions = state['expressions']
         let parent_obj = Expressions.get_obj_from_gdb_var_name(expressions, parent_name)
         if(parent_obj){
             // prepare all the child objects we received for local storage
             let children = r.payload.children.map(child_obj => Expressions.prepare_gdb_obj_for_storage(child_obj, autocreated_for_locals))
             // save these children as a field to their parent
             parent_obj.children = children
-            State.set('expressions', expressions)
+            state['expressions'] = expressions
         }else{
             console.error('Developer error: gdb created a variable, but gdbgui did not expect it to.')
         }
@@ -2373,7 +2259,7 @@ const Expressions = {
         let html = ''
         const is_root = true
 
-        let sorted_expression_objs = _.sortBy(State.get('expressions'), unsorted_obj => unsorted_obj.expression)
+        let sorted_expression_objs = _.sortBy(state['expressions'], unsorted_obj => unsorted_obj.expression)
         // only render variables in scope that were not created for the Locals component
         , objs_to_render = sorted_expression_objs.filter(obj => obj.in_scope === 'true' && obj.autocreated_for_locals === false)
         , objs_to_delete = sorted_expression_objs.filter(obj => obj.in_scope === 'invalid')
@@ -2537,12 +2423,12 @@ const Expressions = {
         `
     },
     fetch_and_show_children_for_var: function(gdb_var_name){
-        let expressions = State.get('expressions')
+        let expressions = state['expressions']
         let obj = Expressions.get_obj_from_gdb_var_name(expressions, gdb_var_name)
         // mutate object by reference
         obj.show_children_in_ui = true
         // update state
-        State.set('expressions', expressions)
+        state['expressions'] = expressions
         if((obj.numchild) && obj.children.length === 0){
             // need to fetch child data
             Expressions._get_children_for_var(gdb_var_name, obj.autocreated_for_locals)
@@ -2551,17 +2437,17 @@ const Expressions = {
         }
     },
     hide_children_in_ui: function(gdb_var_name){
-        let expressions = State.get('expressions')
+        let expressions = state['expressions']
         , obj = Expressions.get_obj_from_gdb_var_name(expressions, gdb_var_name)
         if(obj){
             obj.show_children_in_ui = false
-            State.set('expressions', expressions)
+            state['expressions'] = expressions
         }
     },
     click_toggle_children_visibility: function(e){
         let gdb_var_name = e.currentTarget.dataset.gdb_variable_name
         // get data object, which has field that says whether its expanded or not
-        , obj = Expressions.get_obj_from_gdb_var_name(State.get('expressions'), gdb_var_name)
+        , obj = Expressions.get_obj_from_gdb_var_name(state['expressions'], gdb_var_name)
         , showing_children_in_ui = obj.show_children_in_ui
 
         if(showing_children_in_ui){
@@ -2574,19 +2460,19 @@ const Expressions = {
     },
     click_toggle_plot: function(e){
         let gdb_var_name = e.currentTarget.dataset.gdb_variable_name
-        , expressions = State.get('expressions')
+        , expressions = state['expressions']
         // get data object, which has field that says whether its expanded or not
         , obj = Expressions.get_obj_from_gdb_var_name(expressions, gdb_var_name)
         obj.show_plot = !obj.show_plot
-        State.set('expressions', expressions)
+        state['expressions'] = expressions
     },
     /**
      * Send command to gdb to give us all the children and values
      * for a gdb variable. Note that the gdb variable itself may be a child.
      */
     _get_children_for_var: function(gdb_variable_name, expr_autocreated_for_locals){
-        State.set('expr_gdb_parent_var_currently_fetching_children', gdb_variable_name)
-        State.set('expr_autocreated_for_locals', expr_autocreated_for_locals)
+        state['expr_gdb_parent_var_currently_fetching_children'] = gdb_variable_name
+        state['expr_autocreated_for_locals'] = expr_autocreated_for_locals
         GdbApi.run_gdb_command(`-var-list-children --all-values "${gdb_variable_name}"`)
     },
     get_update_cmds: function(){
@@ -2599,14 +2485,14 @@ const Expressions = {
         }
 
         let cmds = []
-        for(let obj of State.get('expressions')){
+        for(let obj of state['expressions']){
             cmds = cmds.concat(_get_cmds_for_obj(obj))
         }
         return cmds
     },
     handle_changelist: function(changelist_array){
         for(let changelist of changelist_array){
-            let expressions = State.get('expressions')
+            let expressions = state['expressions']
             , obj = Expressions.get_obj_from_gdb_var_name(expressions, changelist.name)
 
             if(obj){
@@ -2625,7 +2511,7 @@ const Expressions = {
                 _.assign(obj, changelist)
                 // update expressions array which will trigger and event, which will
                 // cause components to re-render
-                State.set('expressions', expressions)
+                state['expressions'] = expressions
             }else{
                 // error
             }
@@ -2646,15 +2532,15 @@ const Expressions = {
      * since they are stored as fields in the object)
      */
     _delete_local_gdb_var_data: function(gdb_var_name){
-        let expressions = State.get('expressions')
+        let expressions = state['expressions']
         _.remove(expressions, v => v.name === gdb_var_name)
-        State.set('expressions', expressions)
+        state['expressions'] = expressions
     },
 }
 
 const Locals = {
     init: function(){
-        new Reactor('#locals', {}, Locals.render)
+        new Reactor('#locals', Locals.render)
 
         window.addEventListener('event_inferior_program_exited', Locals.event_inferior_program_exited)
         window.addEventListener('event_inferior_program_running', Locals.event_inferior_program_running)
@@ -2662,10 +2548,10 @@ const Locals = {
         $('body').on('click', '.locals_autocreate_new_expr', Locals.click_locals_autocreate_new_expr)
     },
     render: function(){
-        if(State.get('locals').length === 0){
+        if(state['locals'].length === 0){
             return '<span class=placeholder>no variables to display</span>'
         }
-        let sorted_local_objs = _.sortBy(State.get('locals'), unsorted_obj => unsorted_obj.name)
+        let sorted_local_objs = _.sortBy(state['locals'], unsorted_obj => unsorted_obj.name)
         let html = sorted_local_objs.map(local => {
             let obj = Locals.get_autocreated_obj_from_expr(local.name)
             if(obj){
@@ -2720,7 +2606,7 @@ const Locals = {
         }
     },
     get_autocreated_obj_from_expr: function(expr){
-        for(let obj of State.get('expressions')){
+        for(let obj of state['expressions']){
             if(obj.expression === expr && obj.autocreated_for_locals === true){
                 return obj
             }
@@ -2728,7 +2614,7 @@ const Locals = {
         return null
     },
     clear_autocreated_exprs: function(){
-        let exprs_objs_to_remove = State.get('expressions').filter(obj => obj.autocreated_for_locals !== false)
+        let exprs_objs_to_remove = state['expressions'].filter(obj => obj.autocreated_for_locals !== false)
         exprs_objs_to_remove.map(obj => Expressions.delete_gdb_variable(obj.name))
     },
     clear: function(){
@@ -2747,7 +2633,7 @@ const Locals = {
  */
 const Threads = {
     init: function(){
-        new Reactor('#threads', {}, Threads.render)
+        new Reactor('#threads', Threads.render)
 
         $("body").on("click", ".select_thread_id", Threads.click_select_thread_id)
         $("body").on("click", ".select_frame", Threads.click_select_frame)
@@ -2769,15 +2655,15 @@ const Threads = {
         window.dispatchEvent(new CustomEvent('event_select_frame', {'detail': parseInt(framenum)}))
     },
     render: function(){
-        if(State.get('threads').length > 0){
+        if(state['threads'].length > 0){
             let body = []
-            for(let t of State.get('threads')){
+            for(let t of state['threads']){
 
-                if(State.get('interpreter') === 'lldb'){
+                if(state['interpreter'] === 'lldb'){
                     console.log('TODOLLDB - find current thread id')
                 }
 
-                let is_current_thread_being_rendered = (parseInt(t.id) === State.get('current_thread_id'))
+                let is_current_thread_being_rendered = (parseInt(t.id) === state['current_thread_id'])
                 , cls = is_current_thread_being_rendered ? 'bold' : ''
 
                 let thread_text = `<span class=${cls}>thread id ${t.id}, core ${t.core} (${t.state})</span>`
@@ -2795,11 +2681,11 @@ const Threads = {
                         `)
                 }
 
-                if(is_current_thread_being_rendered || State.get('interpreter') === 'lldb'){
+                if(is_current_thread_being_rendered || state['interpreter'] === 'lldb'){
                     // add stack if current thread
-                    for (let s of State.get('stack')){
+                    for (let s of state['stack']){
                         if(s.addr === t.frame.addr){
-                            body.push(Threads.get_stack_table(State.get('stack'), t.frame.addr, is_current_thread_being_rendered, t.id))
+                            body.push(Threads.get_stack_table(state['stack'], t.frame.addr, is_current_thread_being_rendered, t.id))
                             break
                         }
                     }
@@ -2822,7 +2708,7 @@ const Threads = {
         for (let s of _stack){
 
             // let arrow = (cur_addr === s.addr) ? `<span class='glyphicon glyphicon-arrow-right' style='margin-right: 4px;'></span>` : ''
-            let bold = (State.get('selected_frame_num') === frame_num && is_current_thread_being_rendered) ? 'bold' : ''
+            let bold = (state['selected_frame_num'] === frame_num && is_current_thread_being_rendered) ? 'bold' : ''
             let fullname = 'fullname' in s ? s.fullname : '?'
                 , line = 'line' in s ? s.line : '?'
                 , attrs = is_current_thread_being_rendered ? `class="select_frame pointer ${bold}"` : `class="select_thread_id pointer ${bold}" data-thread_id=${thread_id}`
@@ -2840,20 +2726,20 @@ const Threads = {
         return Util.get_table([], table_data, 'font-size: 0.9em;')
     },
     update_stack: function(stack){
-        State.set('stack', stack)
-        State.set('paused_on_frame', stack[State.get('selected_frame_num') || 0])
+        state['stack'] = stack
+        state['paused_on_frame'] = stack[state['selected_frame_num'] || 0]
 
-        State.set('fullname_to_render', State.get('paused_on_frame').fullname)
+        state['fullname_to_render'] = state['paused_on_frame'].fullname
 
-        State.set('current_line_of_source_code', State.get('paused_on_frame').line)
-        State.set('current_assembly_address', State.get('paused_on_frame').addr)
+        state['current_line_of_source_code'] = parseInt(state['paused_on_frame'].line)
+        state['current_assembly_address'] = state['paused_on_frame'].addr
     },
     set_threads: function(threads){
-        State.Set('threads', $.extend(true, [], threads))
+        state['threads'] = $.extend(true, [], threads)
         Threads.render()
     },
     set_thread_id: function(id){
-        State.set('current_thread_id',  parseInt(id))
+        state['current_thread_id'] =  parseInt(id)
     },
 }
 
@@ -2945,7 +2831,7 @@ const process_gdb_response = function(response_array){
                 }
 
                 // remove duplicate breakpoints
-                let cmds = State.get('breakpoints')
+                let cmds = state['breakpoints']
                     .filter(b => (new_bkpt.fullname === b.fullname && new_bkpt.func === b.func && new_bkpt.line === b.line))
                     .map(b => GdbApi.get_delete_break_cmd(b.number))
                 GdbApi.run_gdb_command(cmds)
@@ -2958,9 +2844,9 @@ const process_gdb_response = function(response_array){
                 // not a file, and therefore it cannot be displayed.
                 if(_.isString(bkpt.fullname_to_display) && bkpt.fullname_to_display.startsWith('/')){
                     // a normal breakpoint or child breakpoint
-                    State.set('fullname_to_render', bkpt.fullname_to_display)
-                    State.set('current_line_of_source_code', bkpt.line)
-                    State.set('current_assembly_address', undefined)
+                    state['fullname_to_render'] = bkpt.fullname_to_display
+                    state['current_line_of_source_code'] = parseInt(bkpt.line)
+                    state['current_assembly_address'] = undefined
                 }
 
                 // refresh all breakpoints
@@ -2973,21 +2859,21 @@ const process_gdb_response = function(response_array){
                 Threads.update_stack(r.payload.stack)
             }
             if('threads' in r.payload){
-                State.set('threads', r.payload.threads)
-                if(State.get('interpreter') === 'gdb'){
-                    State.set('current_thread_id', parseInt(r.payload['current-thread-id']))
-                }else if(State.get('interpreter') === 'lldb'){
+                state['threads'] = r.payload.threads
+                if(state['interpreter'] === 'gdb'){
+                    state['current_thread_id'] = parseInt(r.payload['current-thread-id'])
+                }else if(state['interpreter'] === 'lldb'){
                     // lldb does not provide this
                 }
             }
             if ('register-names' in r.payload) {
                 let names = r.payload['register-names']
                 // filter out empty names
-                State.set('register_names', names.filter(name => name !== ''))
+                state['register_names'] = names.filter(name => name !== '')
             }
             if ('register-values' in r.payload) {
-                State.set('previous_register_values', State.get('current_register_values'))
-                State.set('current_register_values', r.payload['register-values'])
+                state['previous_register_values'] = state['current_register_values']
+                state['current_register_values'] = r.payload['register-values']
             }
             if ('asm_insns' in r.payload) {
                 SourceCode.save_new_assembly(r.payload.asm_insns)
@@ -2995,25 +2881,25 @@ const process_gdb_response = function(response_array){
             if ('files' in r.payload){
                 if(r.payload.files.length > 0){
                     let source_file_paths = _.uniq(r.payload.files.map(f => f.fullname)).sort()
-                    State.set('source_file_paths', source_file_paths)
+                    state['source_file_paths'] = source_file_paths
 
                     let language = 'c_family'
                     if(source_file_paths.some(p => p.endsWith('.rs'))){
                         language = 'rust'
-                        let gdb_version_array = State.get('gdb_version_array')
+                        let gdb_version_array = state['gdb_version_array']
                         // rust cannot view registers with gdb 7.12.x
                         if(gdb_version_array[0] == 7 && gdb_version_array[1] == 12){
-                            GdbConsoleComponent.add(`Warning: Due to a bug in gdb version ${State.get('gdb_version')}, gdbgui cannot show register values with rust executables. See https://github.com/cs01/gdbgui/issues/64 for details.`, true)
-                            State.set('can_fetch_register_values', false)
+                            GdbConsoleComponent.add(`Warning: Due to a bug in gdb version ${state['gdb_version']}, gdbgui cannot show register values with rust executables. See https://github.com/cs01/gdbgui/issues/64 for details.`, true)
+                            state['can_fetch_register_values'] = false
                         }
                     }else if (source_file_paths.some(p => p.endsWith('.go'))){
                         language = 'go'
                     }
-                    State.set('language', language)
+                    state['language'] = language
                 }else{
-                    State.set('source_file_paths', ['Executable was compiled without debug symbols. Source file paths are unknown.'])
+                    state['source_file_paths'] = ['Executable was compiled without debug symbols. Source file paths are unknown.']
 
-                    if (State.get('inferior_binary_path')){
+                    if (state['inferior_binary_path']){
                         Modal.render('Warning',
                          `This binary was not compiled with debug symbols. Recompile with the -g flag for a better debugging experience.
                          <p>
@@ -3031,7 +2917,7 @@ const process_gdb_response = function(response_array){
             // in gdb with '-var-create'. *Those* types of variables are referred to as "expressions" in gdbgui, and
             // are returned by gdbgui as "changelist", or have the keys "has_more", "numchild", "children", or "name".
             if ('variables' in r.payload){
-                State.set('locals', r.payload.variables)
+                state['locals'] = r.payload.variables
             }
             // gdbgui expression (aka a gdb variable was changed)
             if ('changelist' in r.payload){
@@ -3053,20 +2939,20 @@ const process_gdb_response = function(response_array){
             }
 
             // we tried to load a binary, but gdb couldn't find it
-            if(r.payload.msg === `${State.get('inferior_binary_path')}: No such file or directory.`){
+            if(r.payload.msg === `${state['inferior_binary_path']}: No such file or directory.`){
                 window.dispatchEvent(new Event('event_inferior_program_exited'))
             }
 
         } else if (r.type === 'console'){
             GdbConsoleComponent.add(r.payload, r.stream === 'stderr')
-            if(State.get('gdb_version') === undefined){
+            if(state['gdb_version'] === undefined){
                 // parse gdb version from string such as
                 // GNU gdb (Ubuntu 7.7.1-0ubuntu5~14.04.2) 7.7.1
                 let m = /GNU gdb \(.*\)\s*(.*)\\n/g
                 let a = m.exec(r.payload)
                 if(_.isArray(a) && a.length === 2){
-                    State.set('gdb_version', a[1])
-                    State.set('gdb_version_array', a[1].split('.'))
+                    state['gdb_version'] = a[1]
+                    state['gdb_version_array'] = a[1].split('.')
                 }
             }
         }else if (r.type === 'output' || r.type === 'target'){
@@ -3111,6 +2997,21 @@ const process_gdb_response = function(response_array){
 
 const GlobalEvents = {
     init: function(){
+        window.addEventListener('event_inferior_program_exited', GlobalEvents.event_inferior_program_exited)
+        window.addEventListener('event_inferior_program_running', GlobalEvents.event_inferior_program_running)
+        window.addEventListener('event_inferior_program_paused', GlobalEvents.event_inferior_program_paused)
+        window.addEventListener('event_select_frame', GlobalEvents.event_select_frame)
+
+        // make sure saved preferences are set/valid
+        if(localStorage.getItem('highlight_source_code') === null){
+            localStorage.setItem('highlight_source_code', JSON.stringify(true))
+            state['highlight_source_code'] = true
+        }
+        if(localStorage.getItem('auto_add_breakpoint_to_main') === null){
+            localStorage.setItem('auto_add_breakpoint_to_main', JSON.stringify(true))
+            state['auto_add_breakpoint_to_main'] = true
+        }
+
         window.onkeydown = function(e){
            if((e.keyCode === ENTER_BUTTON_NUM)) {
                // when pressing enter in an input, don't redirect entire page
@@ -3145,7 +3046,36 @@ const GlobalEvents = {
                 GdbApi.click_step_instruction_button()
             }
         }
-    }
+    },
+    clear_program_state: function(){
+        state['current_line_of_source_code'] = undefined
+        state['paused_on_frame'] = undefined
+        state['selected_frame_num'] = 0
+        state['current_thread_id'] = undefined
+        state['stack'] = []
+        state['locals'] = []
+    },
+    event_inferior_program_exited: function(){
+        state['inferior_program'] = 'exited'
+        GlobalEvents.clear_program_state()
+    },
+    event_inferior_program_running: function(){
+        state['inferior_program'] = 'running'
+        GlobalEvents.clear_program_state()
+    },
+    event_inferior_program_paused: function(e){
+        let frame = e.detail || {}
+        state['inferior_program'] = 'paused'
+        state['paused_on_frame'] = frame
+        state['fullname_to_render'] = frame.fullname
+
+        state['current_line_of_source_code'] = parseInt(frame.line)
+        state['current_assembly_address'] = frame.addr
+    },
+    event_select_frame: function(e){
+        let selected_frame_num = e.detail || 0
+        state['selected_frame_num'] = selected_frame_num
+    },
 }
 
 /**
@@ -3166,7 +3096,6 @@ Split(['#middle', '#bottom'], {
 })
 
 // initialize components
-State.init()
 GdbApi.init()
 GdbCommandInput.init()
 Modal.init()
@@ -3196,5 +3125,5 @@ if(_.isString(initial_data.initial_binary_and_args) && _.trim(initial_data.initi
     BinaryLoader.set_target_app()
 }
 
-return State
+return state
 })(jQuery, _, stator, Reactor, Awesomplete, Split, io, moment, debug, initial_data)
